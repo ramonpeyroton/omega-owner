@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/admin-x9k2/:path*", "destination": "/" },
+    { "source": "/admin-x9k2", "destination": "/" }
+  ]
+}

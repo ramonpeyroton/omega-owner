@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import Dashboard from './screens/Dashboard';
-import PhaseBoard from './screens/PhaseBoard';
+import PhaseView from './screens/PhaseView';
 import PunchList from './screens/PunchList';
 import Notifications from './screens/Notifications';
 import Warehouse from './screens/Warehouse';
@@ -35,7 +35,7 @@ export default function App({ user, onLogout }) {
 
     if (screen === 'phase-board' && selectedJob)
       return (
-        <PhaseBoard
+        <PhaseView
           job={selectedJob}
           initialPhases={selectedPhases}
           user={user}

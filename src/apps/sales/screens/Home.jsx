@@ -22,13 +22,18 @@ export default function Home({ user, onNavigate, onLogout }) {
 
   async function loadStats() {
     try {
-      const [{ data: jobs }, { count: unseen }] = await Promise.all([
+      // Single-salesperson company: Sales sees all jobs, not only their own.
+      // Split into (a) total count, (b) recent jobs list — `limit(5)` was
+      // capping the Total Jobs number to 5.
+      const [{ count: totalJobs }, { data: jobs }, { count: unseen }] = await Promise.all([
+        supabase
+          .from('jobs')
+          .select('id', { count: 'exact', head: true }),
         supabase
           .from('jobs')
           .select('id, client_name, status, created_at, service')
-          .eq('salesperson_name', user.name)
           .order('created_at', { ascending: false })
-          .limit(5),
+          .limit(50),
         supabase
           .from('notifications')
           .select('id', { count: 'exact', head: true })
@@ -38,7 +43,7 @@ export default function Home({ user, onNavigate, onLogout }) {
       const all = jobs || [];
       const drafts = all.filter((j) => j.status === 'draft').length;
 
-      setStats({ drafts, total: all.length, recent: all.slice(0, 3) });
+      setStats({ drafts, total: totalJobs || all.length, recent: all.slice(0, 3) });
       setNotifCount(unseen || 0);
     } catch (err) {
       console.error(err);

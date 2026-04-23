@@ -228,9 +228,37 @@ only — PIN login = no real auth). Tighten when migrating to Supabase Auth.
 - `DOCUSIGN_BASE_URL`, `DOCUSIGN_OAUTH_BASE`
 - `DOCUSIGN_PRIVATE_KEY` (RSA PEM)
 - `DOCUSIGN_HMAC_SECRET` (optional)
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (webhook only)
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (webhook + twilio-send logging)
+- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
+- `TWILIO_PHONE_NUMBER` (E.164 SMS sender, e.g. `+12035551234`)
+- `TWILIO_WHATSAPP_FROM` (e.g. `whatsapp:+14155238886` — Twilio sandbox or approved sender)
 
 Set on Vercel → Settings → Environment Variables for Production.
+
+---
+
+## ✉️ SMS / WhatsApp (Twilio)
+
+- Server: `api/twilio-send.js` — POSTs to Twilio REST.
+- Client helper: `src/shared/lib/twilio.js` (`sendMessage`, deep-link fallbacks, templates).
+- UI:
+  - Per-phase button in `PhaseBreakdown.jsx` — opens a sub picker (SMS / WhatsApp),
+    pre-fills the confirmation template, sends via `/api/twilio-send`.
+  - Job-wide tab "Contact" in `JobFullView.jsx` (roles: manager, owner, operations, admin).
+  - Manager `PhaseView.jsx` has a "Contact Subs" header toggle that swaps the phase list for the contact list.
+- Audit: every send (success/fail) is written to `message_log` via the service role key
+  — run `migrations/002_message_log.sql` once to create the table.
+- Fallback: if Twilio isn't configured, the modal still lets the user open the native
+  `sms:` URI or `wa.me` link.
+
+## 🔒 Session / "Remember me"
+
+- Helper: `src/shared/lib/authStorage.js` (`saveSession`, `loadSession`, `clearSession`).
+- Checkbox on both `Login.jsx` and `AdminLogin.jsx` — default **off**.
+  - Off → sessionStorage (same behavior as before, cleared with the tab).
+  - On  → localStorage with 30-day expiry; auto-cleared on next load when expired.
+- Legacy keys `omega_unified_user` / `omega_unified_admin` are still read on first load
+  and migrated to the new v2 keys so existing logged-in sessions don't get bounced.
 
 ---
 

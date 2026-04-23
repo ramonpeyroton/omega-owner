@@ -525,14 +525,47 @@ export function progressFromPhaseData(phaseData) {
   return { totalDone, totalItems, progress, currentPhaseName };
 }
 
-// Pipeline status → label used to display "step phase atual".
+// Pipeline status → display label. Keep keys in sync with PIPELINE_COLORS
+// below and with the Supabase check constraint in
+// migrations/004_receptionist_and_pipeline.sql.
 export const PIPELINE_STEP_LABEL = {
-  new_lead:          'Review Estimate',
-  estimate_sent:     'Estimate Sent',
-  estimate_approved: 'Estimate Approved',
-  contract_sent:     'Contract Sent',
-  contract_signed:   'Contract Signed',
-  in_progress:       'In Progress',
-  completed:         'Completed',
-  on_hold:           'On Hold',
+  new_lead:             'New Lead',
+  estimate_draft:       'Estimate Draft',
+  estimate_sent:        'Estimate Sent',
+  estimate_negotiating: 'Estimate Negotiating',
+  estimate_approved:    'Estimate Approved',
+  contract_sent:        'Contract Sent',
+  contract_signed:      'Contract Signed',
+  in_progress:          'In Progress',
+  completed:            'Completed',
+  estimate_rejected:    'Estimate Rejected',
 };
+
+// Canonical color per status. Single source of truth — Kanban columns,
+// job-card badges and any ad-hoc pill reads from here.
+export const PIPELINE_COLORS = {
+  new_lead:             { hex: '#6B7280', tailwindBg: 'bg-gray-500',    soft: 'bg-gray-50' },
+  estimate_draft:       { hex: '#4B5563', tailwindBg: 'bg-gray-600',    soft: 'bg-gray-100' },
+  estimate_sent:        { hex: '#3B82F6', tailwindBg: 'bg-blue-500',    soft: 'bg-blue-50/60' },
+  estimate_negotiating: { hex: '#8B5CF6', tailwindBg: 'bg-violet-500',  soft: 'bg-violet-50' },
+  estimate_approved:    { hex: '#10B981', tailwindBg: 'bg-emerald-500', soft: 'bg-emerald-50' },
+  contract_sent:        { hex: '#F97316', tailwindBg: 'bg-omega-orange',soft: 'bg-omega-pale' },
+  contract_signed:      { hex: '#EAB308', tailwindBg: 'bg-yellow-500',  soft: 'bg-yellow-50' },
+  in_progress:          { hex: '#22C55E', tailwindBg: 'bg-green-500',   soft: 'bg-green-50' },
+  completed:            { hex: '#15803D', tailwindBg: 'bg-green-700',   soft: 'bg-green-100/60' },
+  estimate_rejected:    { hex: '#EF4444', tailwindBg: 'bg-red-500',     soft: 'bg-red-50' },
+};
+
+// Canonical Kanban column order (left → right).
+export const PIPELINE_ORDER = [
+  'new_lead',
+  'estimate_draft',
+  'estimate_sent',
+  'estimate_negotiating',
+  'estimate_approved',
+  'contract_sent',
+  'contract_signed',
+  'in_progress',
+  'completed',
+  'estimate_rejected',
+];

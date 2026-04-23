@@ -7,6 +7,7 @@ import Toast from '../components/Toast';
 import StatusBadge from '../components/StatusBadge';
 import COIBadge, { getCoiState } from '../components/COIBadge';
 import { logAudit } from '../../../shared/lib/audit';
+import { formatPhoneInput, toE164 } from '../../../shared/lib/phone';
 
 function maskTaxId(taxId) {
   if (!taxId) return '—';
@@ -98,9 +99,14 @@ export default function SubcontractorManager({ user }) {
     e.preventDefault();
     setSavingEdit(true);
     try {
-      // Convert empty strings to null so Postgres accepts typed columns (date)
+      // Convert empty strings to null so Postgres accepts typed columns
+      // (date), and normalize phone to E.164 for Twilio.
       const patch = Object.fromEntries(
-        Object.entries(editForm).map(([k, v]) => [k, v === '' ? null : v])
+        Object.entries(editForm).map(([k, v]) => {
+          if (v === '') return [k, null];
+          if (k === 'phone' && v) return [k, toE164(v) || v];
+          return [k, v];
+        })
       );
       if (editCoiFile) {
         try {
@@ -157,8 +163,13 @@ export default function SubcontractorManager({ user }) {
     e.preventDefault();
     try {
       // Convert empty strings to null (Postgres rejects '' for date/numeric)
+      // and normalize phone to E.164 so Twilio works everywhere.
       const payload = Object.fromEntries(
-        Object.entries(subForm).map(([k, v]) => [k, v === '' ? null : v])
+        Object.entries(subForm).map(([k, v]) => {
+          if (v === '') return [k, null];
+          if (k === 'phone' && v) return [k, toE164(v) || v];
+          return [k, v];
+        })
       );
       const { data, error } = await supabase.from('subcontractors').insert([payload]).select().single();
       if (error) throw error;
@@ -409,7 +420,7 @@ export default function SubcontractorManager({ user }) {
               {[
                 { k: 'name', label: 'Name', required: true, colSpan: 2 },
                 { k: 'trade', label: 'Trade' },
-                { k: 'phone', label: 'Phone' },
+                { k: 'phone', label: 'Phone', type: 'phone' },
                 { k: 'email', label: 'Email', type: 'email' },
                 { k: 'tax_id', label: 'Tax ID' },
                 { k: 'insurance_company', label: 'Insurance Company' },
@@ -418,7 +429,18 @@ export default function SubcontractorManager({ user }) {
               ].map((f) => (
                 <div key={f.k} className={f.colSpan === 2 ? 'sm:col-span-2' : ''}>
                   <label className="text-xs font-semibold text-omega-stone uppercase">{f.label}</label>
-                  <input type={f.type || 'text'} required={!!f.required} value={subForm[f.k]} onChange={(e) => setSubForm({ ...subForm, [f.k]: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                  {f.type === 'phone' ? (
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={subForm[f.k] || ''}
+                      onChange={(e) => setSubForm({ ...subForm, [f.k]: formatPhoneInput(e.target.value) })}
+                      placeholder="(203) 555-1234"
+                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                    />
+                  ) : (
+                    <input type={f.type || 'text'} required={!!f.required} value={subForm[f.k]} onChange={(e) => setSubForm({ ...subForm, [f.k]: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                  )}
                 </div>
               ))}
               <div className="sm:col-span-2">
@@ -515,7 +537,7 @@ export default function SubcontractorManager({ user }) {
               {[
                 { k: 'name', label: 'Name', required: true, colSpan: 2 },
                 { k: 'trade', label: 'Trade' },
-                { k: 'phone', label: 'Phone' },
+                { k: 'phone', label: 'Phone', type: 'phone' },
                 { k: 'email', label: 'Email', type: 'email' },
                 { k: 'tax_id', label: 'Tax ID' },
                 { k: 'insurance_company', label: 'Insurance Company' },
@@ -524,13 +546,24 @@ export default function SubcontractorManager({ user }) {
               ].map((f) => (
                 <div key={f.k} className={f.colSpan === 2 ? 'sm:col-span-2' : ''}>
                   <label className="text-xs font-semibold text-omega-stone uppercase">{f.label}</label>
-                  <input
-                    type={f.type || 'text'}
-                    required={!!f.required}
-                    value={editForm[f.k] || ''}
-                    onChange={(e) => setEditForm({ ...editForm, [f.k]: e.target.value })}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
-                  />
+                  {f.type === 'phone' ? (
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={editForm[f.k] || ''}
+                      onChange={(e) => setEditForm({ ...editForm, [f.k]: formatPhoneInput(e.target.value) })}
+                      placeholder="(203) 555-1234"
+                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                    />
+                  ) : (
+                    <input
+                      type={f.type || 'text'}
+                      required={!!f.required}
+                      value={editForm[f.k] || ''}
+                      onChange={(e) => setEditForm({ ...editForm, [f.k]: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                    />
+                  )}
                 </div>
               ))}
               <div className="sm:col-span-2">

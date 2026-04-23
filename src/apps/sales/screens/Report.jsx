@@ -400,8 +400,12 @@ export default function Report({ job, pdfContext = '', onNavigate }) {
         .update({ report_raw: rawReport, report: rawReport, status: 'to_quote', answers: mergedAnswers })
         .eq('id', job.id);
       setReportTs(ts);
-      setToast({ type: 'success', message: 'Report saved!' });
+      setToast({ type: 'success', message: 'Report saved! Returning home…' });
       await createPhasesForJob(job.id, job.service);
+      // After a successful save the seller is done with this job — route
+      // them back to Home so they can move on. Small delay lets the toast
+      // flash briefly before the screen change.
+      setTimeout(() => onNavigate('home'), 700);
     } catch {
       setToast({ type: 'error', message: 'Failed to save report.' });
     } finally {
@@ -427,7 +431,9 @@ export default function Report({ job, pdfContext = '', onNavigate }) {
       <div className="no-print bg-omega-charcoal px-5 pt-12 pb-4 sticky top-0 z-10">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
-            <button onClick={() => onNavigate('questionnaire')} className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors flex-shrink-0">
+            {/* Back goes Home — coming from Report the seller's natural
+                exit is the dashboard, not back into the questionnaire. */}
+            <button onClick={() => onNavigate('home')} className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors flex-shrink-0">
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div className="min-w-0">

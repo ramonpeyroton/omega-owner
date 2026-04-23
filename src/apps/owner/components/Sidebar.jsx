@@ -1,10 +1,11 @@
-import { LayoutDashboard, Users, Bell, LogOut, FileSearch, Package, Brain, GitBranch } from 'lucide-react';
+import { LayoutDashboard, Users, Bell, LogOut, FileSearch, Package, Brain, GitBranch, Calendar } from 'lucide-react';
 import Logo from './Logo';
 import NotificationsBell from '../../../shared/components/NotificationsBell';
 
 const NAV = [
   { id: 'dashboard',        label: 'Dashboard',        icon: LayoutDashboard },
   { id: 'pipeline',         label: 'Pipeline',          icon: GitBranch },
+  { id: 'calendar',         label: 'Calendar',          icon: Calendar },
   { id: 'project-analyzer', label: 'Project Analyzer', icon: FileSearch },
   { id: 'warehouse',        label: 'Warehouse',         icon: Package },
   { id: 'omega-brain',      label: 'Omega Brain',       icon: Brain },

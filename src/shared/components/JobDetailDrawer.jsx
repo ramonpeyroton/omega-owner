@@ -10,20 +10,15 @@ import DailyLogsSection from './DailyLogsSection';
 import TimeTrackingSection from './TimeTrackingSection';
 import ProjectReportSection from './ProjectReportSection';
 import { logAudit } from '../lib/audit';
-import { PIPELINE_STEP_LABEL } from '../config/phaseBreakdown';
+import { PIPELINE_STEP_LABEL, PIPELINE_COLORS } from '../config/phaseBreakdown';
 
 // Maps pipeline_status → the same palette used by the Kanban columns so the
-// drawer header feels connected to the board.
-const PIPELINE_BADGE = {
-  new_lead:          { bg: 'bg-gray-400',    text: 'text-white' },
-  estimate_sent:     { bg: 'bg-blue-500',    text: 'text-white' },
-  estimate_approved: { bg: 'bg-purple-500',  text: 'text-white' },
-  contract_sent:     { bg: 'bg-omega-orange',text: 'text-white' },
-  contract_signed:   { bg: 'bg-amber-400',   text: 'text-white' },
-  in_progress:       { bg: 'bg-green-500',   text: 'text-white' },
-  completed:         { bg: 'bg-green-700',   text: 'text-white' },
-  on_hold:           { bg: 'bg-red-500',     text: 'text-white' },
-};
+// drawer header feels connected to the board. Palette values live in
+// PIPELINE_COLORS (config/phaseBreakdown.js) so colors stay in sync.
+function paletteFor(key) {
+  const c = PIPELINE_COLORS[key];
+  return { bg: c?.tailwindBg || 'bg-gray-400', text: 'text-white' };
+}
 
 // Must match the columns actually inserted by NewJob.jsx on creation.
 // If you add city / notes / etc. here, first add the columns to the
@@ -151,7 +146,7 @@ export default function JobDetailDrawer({ job, user, onClose, onJobUpdated, onJo
           <div className="flex items-center gap-2 mt-3 flex-wrap">
             {(() => {
               const key = job.pipeline_status || 'new_lead';
-              const palette = PIPELINE_BADGE[key] || PIPELINE_BADGE.new_lead;
+              const palette = paletteFor(key);
               return (
                 <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md ${palette.bg} ${palette.text}`}>
                   {PIPELINE_STEP_LABEL[key] || key.replace('_', ' ')}

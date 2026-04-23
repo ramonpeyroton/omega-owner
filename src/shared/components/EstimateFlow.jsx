@@ -93,10 +93,48 @@ export default function EstimateFlow({ job, user, onBack }) {
       else if (ctr) setStep(3);
       else if (est?.approved_at) setStep(2);
       else setStep(1);
+
+      // When EstimateFlow opens on a job that still sits at `new_lead`,
+      // the estimate is now "in review" — promote to estimate_draft so
+      // the kanban reflects that work has started.
+      if (est && (!job.pipeline_status || job.pipeline_status === 'new_lead')) {
+        await setJobPipeline('estimate_draft');
+      }
     } catch (err) {
       setToast({ type: 'error', message: 'Failed to load estimate data' });
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Single helper for pipeline_status writes. Keeps the state machine
+  // transitions in one place and audits each promotion.
+  async function setJobPipeline(next) {
+    try {
+      await supabase.from('jobs').update({ pipeline_status: next }).eq('id', job.id);
+      logAudit({ user, action: 'pipeline.transition', entityType: 'job', entityId: job.id, details: { to: next } });
+    } catch { /* non-fatal */ }
+  }
+
+  async function sendEstimateToClient() {
+    if (!perms.canEditEstimate) { setToast({ type: 'warning', message: 'Only Operations or Owner can send the estimate' }); return; }
+    if (!estimate) { setToast({ type: 'error', message: 'No estimate to send' }); return; }
+    setSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from('estimates')
+        .update({ status: 'sent', sent_at: new Date().toISOString(), sent_by: user?.name || null })
+        .eq('id', estimate.id)
+        .select().single();
+      if (error) throw error;
+      setEstimate(data);
+      await setJobPipeline('estimate_sent');
+      notify({ recipientRole: 'sales', title: 'Estimate sent to client', message: `${job.client_name || 'Job'} — estimate has been sent.`, type: 'estimate', jobId: job.id });
+      setToast({ type: 'success', message: 'Estimate sent to client' });
+    } catch (err) {
+      setToast({ type: 'error', message: err.message || 'Failed to send estimate' });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -112,6 +150,8 @@ export default function EstimateFlow({ job, user, onBack }) {
     setSaving(false);
     if (error) { setToast({ type: 'error', message: error.message }); return; }
     setEstimate(data);
+    // Client accepted the estimate → promote job to estimate_approved.
+    await setJobPipeline('estimate_approved');
     logAudit({ user, action: 'estimate.approve', entityType: 'estimate', entityId: data.id, details: { job_id: job.id, total: data.total_amount } });
     notify({ recipientRole: 'operations', title: 'Estimate approved', message: `${job.client_name || 'A client'} approved the estimate for ${job.service || 'their project'}.`, type: 'estimate', jobId: job.id });
     notify({ recipientRole: 'owner', title: 'Estimate approved', message: `${job.client_name || 'Client'}: $${Number(data.total_amount || 0).toLocaleString()}`, type: 'estimate', jobId: job.id });
@@ -127,8 +167,12 @@ export default function EstimateFlow({ job, user, onBack }) {
     setSaving(false);
     if (error) { setToast({ type: 'error', message: error.message }); return; }
     setEstimate(data);
+    // Hard rejection → promote job to estimate_rejected so the card
+    // moves to the last column on the Kanban.
+    await setJobPipeline('estimate_rejected');
     logAudit({ user, action: 'estimate.reject', entityType: 'estimate', entityId: data.id, details: { job_id: job.id } });
-    setToast({ type: 'info', message: 'Marked for changes' });
+    notify({ recipientRole: 'sales', title: 'Estimate rejected', message: `${job.client_name || 'Job'} — client rejected the estimate.`, type: 'estimate', jobId: job.id });
+    setToast({ type: 'info', message: 'Marked as rejected' });
   }
 
   async function submitChangeRequest() {
@@ -148,6 +192,9 @@ export default function EstimateFlow({ job, user, onBack }) {
       .select().single();
     if (error) { setSaving(false); setToast({ type: 'error', message: error.message }); return; }
     setEstimate(data);
+    // Client wants changes → move to estimate_negotiating so the board
+    // shows that a back-and-forth is happening (not approved, not dead).
+    await setJobPipeline('estimate_negotiating');
     logAudit({ user, action: 'estimate.request_changes', entityType: 'estimate', entityId: data.id, details: { job_id: job.id, text: changeText.trim().slice(0, 200) } });
     notify({ recipientRole: 'sales', title: 'Changes requested', message: `${job.client_name || 'Job'}: ${changeText.trim().slice(0, 120)}`, type: 'estimate', jobId: job.id });
     // Best-effort notification to Attila (or sales team).
@@ -353,6 +400,14 @@ export default function EstimateFlow({ job, user, onBack }) {
                   <button onClick={() => setShowChangeModal(true)} disabled={saving} className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-omega-info hover:bg-blue-900 text-white text-sm font-semibold disabled:opacity-60">
                     <MessageSquare className="w-4 h-4" /> Request Changes
                   </button>
+                  {/* Send to Client — only when estimate hasn't been sent yet.
+                      Moves pipeline to estimate_sent so the client-side team
+                      knows the estimate is now with the client. */}
+                  {estimate.status !== 'sent' && estimate.status !== 'approved' && (
+                    <button onClick={sendEstimateToClient} disabled={saving || !perms.canEditEstimate} className="px-4 py-2.5 rounded-xl border-2 border-omega-orange text-omega-orange hover:bg-omega-pale text-sm font-semibold disabled:opacity-60">
+                      {saving ? 'Sending…' : 'Send to Client'}
+                    </button>
+                  )}
                   <button onClick={approveEstimate} disabled={saving || !perms.canEditEstimate} className="px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60">
                     {saving ? 'Saving…' : 'Approve Estimate'}
                   </button>

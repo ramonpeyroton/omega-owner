@@ -1,30 +1,41 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
- * Prevents the browser's back button from exiting the SPA.
+ * Intercepts the browser / device back button so it never drops the
+ * user out of the SPA. Instead of locking them in place, it runs
+ * `onBack(depth)` — the caller decides where to go (usually: back one
+ * step, or to the role's home screen).
  *
- * Strategy: push a sentinel history entry after login. When the user hits
- * back, popstate fires — we push the sentinel again so the page never
- * leaves the app. Navigation inside the app remains untouched because we
- * don't use the browser history for that (state-based routing).
+ * Strategy:
+ *   - On mount we push a sentinel state so there is always something
+ *     for the browser to pop back to.
+ *   - Every popstate → push the sentinel again and call onBack(depth).
+ *     The `depth` increments each time the user keeps pressing back,
+ *     so the caller can detect "pressed back while already at home"
+ *     and show a toast like "Press again to sign out".
  *
- * This is app-level safety net only. It does NOT replace proper routing.
- *
- * @param {boolean} active  — enable the guard (usually: only when logged in)
- * @param {() => void} [onBack] — optional callback when back is intercepted
+ * @param {boolean}   active    — enable the guard (usually only when logged in)
+ * @param {(depth:number)=>void} [onBack] — fires on every intercepted back tap
  */
 export function useBackButtonGuard(active, onBack) {
+  const depthRef = useRef(0);
+
   useEffect(() => {
     if (!active) return;
 
-    // Push an initial sentinel so there's always something to pop to
+    // Reset depth whenever the guard is re-activated (e.g. after a login).
+    depthRef.current = 0;
+
+    // Push an initial sentinel so there's always something to pop to.
     try { window.history.pushState({ __omega: true }, ''); } catch { /* ignore */ }
 
     function onPop() {
-      // Put the sentinel back and stay put
+      // Immediately replace with a fresh sentinel so a second back still
+      // fires a popstate event (browsers coalesce repeated pops otherwise).
       try { window.history.pushState({ __omega: true }, ''); } catch { /* ignore */ }
+      depthRef.current += 1;
       if (typeof onBack === 'function') {
-        try { onBack(); } catch { /* ignore */ }
+        try { onBack(depthRef.current); } catch { /* ignore */ }
       }
     }
 

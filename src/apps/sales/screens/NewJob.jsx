@@ -5,17 +5,11 @@ import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
 import * as Icons from 'lucide-react';
 import { notify } from '../../../shared/lib/notifications';
+import { formatPhoneInput, toE164 } from '../../../shared/lib/phone';
 
 function ServiceIcon({ name }) {
   const Icon = Icons[name] || Icons.Wrench;
   return <Icon className="w-6 h-6" />;
-}
-
-function maskPhone(raw) {
-  const digits = raw.replace(/\D/g, '').slice(0, 10);
-  if (digits.length < 4) return digits;
-  if (digits.length < 7) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
 export default function NewJob({ user, onNavigate, onJobCreated }) {
@@ -69,7 +63,7 @@ export default function NewJob({ user, onNavigate, onJobCreated }) {
     try {
       const jobData = {
         client_name: form.client_name.trim(),
-        client_phone: form.client_phone,
+        client_phone: toE164(form.client_phone) || form.client_phone,
         client_email: form.client_email.trim() || null,
         address: form.address.trim(),
         salesperson_name: user.name,
@@ -162,7 +156,7 @@ export default function NewJob({ user, onNavigate, onJobCreated }) {
                 <input
                   type="tel"
                   value={form.client_phone}
-                  onChange={(e) => updateForm('client_phone', maskPhone(e.target.value))}
+                  onChange={(e) => updateForm('client_phone', formatPhoneInput(e.target.value))}
                   placeholder="(203) 555-0100"
                   className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors ${errors.client_phone ? 'border-omega-danger' : 'border-gray-200'}`}
                 />

@@ -10,6 +10,8 @@ import Notifications from './screens/Notifications';
 import PipelineKanban from '../../shared/components/PipelineKanban';
 import EstimateFlow from '../../shared/components/EstimateFlow';
 import JarvisChat from '../../shared/components/JarvisChat';
+import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
+import { useBackNavHome } from '../../shared/lib/backNav';
 import { ArrowLeft } from 'lucide-react';
 
 export default function App(props) {
@@ -39,6 +41,10 @@ function SalesRouter({ user, onLogout }) {
   };
 
   const navigate = (target) => setScreen(target);
+
+  useBackNavHome(() => {
+    if (screen !== 'home') setScreen('home');
+  });
 
   if (screen === 'home')
     return <Home user={user} onNavigate={navigate} onLogout={handleLogout} />;
@@ -137,6 +143,18 @@ function SalesRouter({ user, onLogout }) {
 
   if (screen === 'estimate-flow' && currentJob)
     return <EstimateFlow job={currentJob} user={user} onBack={() => setScreen('pipeline')} />;
+
+  if (screen === 'calendar')
+    return (
+      <div className="min-h-screen bg-omega-cloud flex flex-col">
+        <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+          <button onClick={() => setScreen('home')} className="inline-flex items-center gap-1 text-sm font-semibold text-omega-stone hover:text-omega-charcoal">
+            <ArrowLeft className="w-4 h-4" /> Home
+          </button>
+        </div>
+        <CalendarScreen user={user} />
+      </div>
+    );
 
   if (screen === 'notifications')
     return <Notifications onNavigate={navigate} />;

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { PlusCircle, ClipboardList, Bell, LogOut, TrendingUp, Clock, CheckCircle, GitBranch } from 'lucide-react';
+import { PlusCircle, ClipboardList, Bell, LogOut, TrendingUp, Clock, CheckCircle, GitBranch, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Logo from '../components/Logo';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -181,6 +181,19 @@ export default function Home({ user, onNavigate, onLogout }) {
             <div className="text-left">
               <p className="text-omega-charcoal font-bold text-base">Pipeline</p>
               <p className="text-omega-stone text-sm">Drag your jobs between phases</p>
+            </div>
+          </button>
+
+          <button
+            onClick={() => onNavigate('calendar')}
+            className="w-full flex items-center gap-4 p-5 rounded-2xl bg-white hover:bg-gray-50 active:scale-[0.98] transition-all duration-200 border border-gray-200 shadow-sm"
+          >
+            <div className="w-12 h-12 rounded-xl bg-omega-pale flex items-center justify-center flex-shrink-0">
+              <Calendar className="w-6 h-6 text-omega-orange" />
+            </div>
+            <div className="text-left">
+              <p className="text-omega-charcoal font-bold text-base">Calendar</p>
+              <p className="text-omega-stone text-sm">Your visits and company events</p>
             </div>
           </button>
 

@@ -9,12 +9,13 @@ import { logAudit } from './shared/lib/audit';
 // precedence when available. Admin role is INTENTIONALLY NOT here — admin
 // only logs in through the hidden /admin-x9k2 route.
 const PIN_TO_ROLE = {
-  '3333': 'owner',       // Inácio
-  '4444': 'operations',  // Brenda
-  '1111': 'sales',       // Attila
-  '2222': 'manager',     // Gabriel
-  '5555': 'screen',      // Dash (placeholder)
-  '7777': 'marketing',   // Ramon (placeholder)
+  '3333': 'owner',        // Inácio
+  '4444': 'operations',   // Brenda
+  '1111': 'sales',        // Attila
+  '2222': 'manager',      // Gabriel
+  '5555': 'screen',       // Dash (placeholder)
+  '7777': 'marketing',    // Ramon (placeholder)
+  '9999': 'receptionist', // Front desk
 };
 
 // PINs that are silently rejected in the public login (they work only in
@@ -25,6 +26,7 @@ export default function Login({ onLogin }) {
   const [name, setName] = useState('');
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -77,8 +79,8 @@ export default function Login({ onLogin }) {
 
     const user = { name: resolvedName, role };
     // Fire-and-forget audit log
-    logAudit({ user, action: 'user.login', entityType: 'user', details: { role } });
-    onLogin(user);
+    logAudit({ user, action: 'user.login', entityType: 'user', details: { role, remember } });
+    onLogin(user, { remember });
   };
 
   return (
@@ -126,6 +128,18 @@ export default function Login({ onLogin }) {
               </button>
             </div>
           </div>
+
+          {/* Remember me — default OFF. When ON, session persists 30 days
+              via localStorage; otherwise it stays in sessionStorage (tab). */}
+          <label className="flex items-center gap-2.5 select-none cursor-pointer pt-1">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="w-4 h-4 rounded border-white/30 bg-white/10 text-omega-orange focus:ring-omega-orange focus:ring-offset-0 cursor-pointer"
+            />
+            <span className="text-sm text-omega-fog">Remember me on this device</span>
+          </label>
 
           {error && (
             <div className="px-4 py-3 rounded-xl bg-omega-danger/20 border border-omega-danger/30">

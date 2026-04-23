@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, MapPin } from 'lucide-react';
+import { ArrowLeft, MapPin, MessageSquare } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import PhaseBreakdown from '../../../shared/components/PhaseBreakdown';
+import ContactSection from '../../../shared/components/ContactSection';
+import MaterialsSection from '../../../shared/components/MaterialsSection';
 
 // Manager's phase view — uses the SHARED PhaseBreakdown so the Manager
 // sees the same detailed phase templates (`jobs.phase_data`) that the
@@ -10,6 +12,7 @@ import PhaseBreakdown from '../../../shared/components/PhaseBreakdown';
 // longer wired.
 export default function PhaseView({ job: initialJob, user, onNavigate }) {
   const [job, setJob] = useState(initialJob);
+  const [showContact, setShowContact] = useState(false);
 
   // Re-fetch on mount so `phase_data` is always fresh (sync across roles).
   useEffect(() => {
@@ -53,15 +56,34 @@ export default function PhaseView({ job: initialJob, user, onNavigate }) {
               {String(job.pipeline_status).replace(/_/g, ' ')}
             </span>
           )}
+          <button
+            onClick={() => setShowContact((v) => !v)}
+            className={`ml-auto inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-md transition-colors ${
+              showContact ? 'bg-white text-omega-charcoal' : 'bg-white/10 text-white hover:bg-white/20'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            {showContact ? 'Hide Contacts' : 'Contact Subs'}
+          </button>
         </div>
       </header>
 
-      <div className="max-w-3xl mx-auto p-4 sm:p-6">
-        <PhaseBreakdown
-          job={job}
-          user={user}
-          onJobUpdated={(updated) => setJob(updated)}
-        />
+      <div className="max-w-3xl mx-auto p-4 sm:p-6 space-y-5">
+        {showContact ? (
+          <ContactSection job={job} user={user} />
+        ) : (
+          <>
+            <PhaseBreakdown
+              job={job}
+              user={user}
+              onJobUpdated={(updated) => setJob(updated)}
+            />
+            {/* Materials for this job — Gabriel's shopping list lives
+                next to the phase checklist so he adds items as he finds
+                them, then sees them aggregated on the Materials Run. */}
+            <MaterialsSection job={job} user={user} />
+          </>
+        )}
       </div>
     </div>
   );

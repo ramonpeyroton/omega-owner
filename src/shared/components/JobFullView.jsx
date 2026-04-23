@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import {
   ArrowLeft, Edit3, Save, X, Eye, EyeOff, Trash2, Calendar, MapPin, Phone, Mail,
   User as UserIcon, Briefcase, HardHat, FileText, Hammer, Sparkles, ClipboardEdit,
-  AlertCircle, DollarSign, Clock, Receipt, ArrowRight, TrendingUp, Info,
+  AlertCircle, DollarSign, Clock, Receipt, ArrowRight, TrendingUp, Info, MessageSquare,
+  FolderClosed,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Toast from './Toast';
@@ -13,27 +14,29 @@ import DailyLogsSection from './DailyLogsSection';
 import TimeTrackingSection from './TimeTrackingSection';
 import ProjectReportSection from './ProjectReportSection';
 import CostProjectionSection from './CostProjectionSection';
+import ContactSection from './ContactSection';
+import DocumentsSection from './DocumentsSection';
+import EstimateBuilder from './EstimateBuilder';
+import MaterialsSection from './MaterialsSection';
 import { logAudit } from '../lib/audit';
-import { PIPELINE_STEP_LABEL } from '../config/phaseBreakdown';
+import { PIPELINE_STEP_LABEL, PIPELINE_COLORS } from '../config/phaseBreakdown';
+import { formatPhoneInput, toE164 } from '../lib/phone';
 
 // Roles allowed to see the Financials tab (Cost Projection + Job Costing + Actual Costs).
 // Admin has global access; Owner and Operations (Brenda) see financials.
 const FINANCIAL_ROLES = new Set(['owner', 'operations', 'admin']);
 
-const PIPELINE_BADGE = {
-  new_lead:          { bg: 'bg-gray-400',    text: 'text-white' },
-  estimate_sent:     { bg: 'bg-blue-500',    text: 'text-white' },
-  estimate_approved: { bg: 'bg-purple-500',  text: 'text-white' },
-  contract_sent:     { bg: 'bg-omega-orange',text: 'text-white' },
-  contract_signed:   { bg: 'bg-amber-400',   text: 'text-white' },
-  in_progress:       { bg: 'bg-green-500',   text: 'text-white' },
-  completed:         { bg: 'bg-green-700',   text: 'text-white' },
-  on_hold:           { bg: 'bg-red-500',     text: 'text-white' },
-};
+// Roles allowed to see the Contact tab (send SMS / WhatsApp to subs + client).
+const CONTACT_ROLES = new Set(['manager', 'owner', 'operations', 'admin']);
+
+function pipelinePaletteFor(key) {
+  const c = PIPELINE_COLORS[key];
+  return { bg: c?.tailwindBg || 'bg-gray-400', text: 'text-white' };
+}
 
 const EDITABLE_FIELDS = [
   { key: 'client_name',  label: 'Client Name' },
-  { key: 'client_phone', label: 'Phone' },
+  { key: 'client_phone', label: 'Phone', type: 'phone' },
   { key: 'client_email', label: 'Email', type: 'email' },
   { key: 'address',      label: 'Address', type: 'textarea' },
   { key: 'service',      label: 'Service Type' },
@@ -74,6 +77,7 @@ export default function JobFullView({
   const [deleting, setDeleting] = useState(false);
 
   const canSeeFinancials = FINANCIAL_ROLES.has(user?.role);
+  const canContact       = CONTACT_ROLES.has(user?.role);
 
   useEffect(() => {
     setJob(initialJob);
@@ -98,7 +102,12 @@ export default function JobFullView({
     setSaving(true);
     try {
       const patch = Object.fromEntries(
-        Object.entries(form).map(([k, v]) => [k, v === '' ? null : v])
+        Object.entries(form).map(([k, v]) => {
+          if (v === '') return [k, null];
+          // Persist phone in E.164 so Twilio accepts it without retries.
+          if (k === 'client_phone' && v) return [k, toE164(v) || v];
+          return [k, v];
+        })
       );
       const { data, error } = await supabase.from('jobs').update(patch).eq('id', job.id).select().single();
       if (error) throw error;
@@ -122,15 +131,34 @@ export default function JobFullView({
   }
 
   async function confirmDelete() {
+    // Delete always requires the Owner PIN (3333) — even Brenda has to
+    // type it. The audit log captures which role/person INITIATED the
+    // delete plus the PIN string actually used, so Admin can see who
+    // authorized every deletion.
     if (deletePin !== '3333') {
       setDeletePinError('Incorrect PIN. Try again.');
+      // Fire-and-forget attempt log (failed attempts are auditable too)
+      logAudit({
+        user, action: 'job.delete.pin_failed', entityType: 'job', entityId: job.id,
+        details: { client: job.client_name, attempted_pin_prefix: (deletePin || '').slice(0, 1) + '***' },
+      });
       return;
     }
     setDeleting(true);
     try {
       const { error } = await supabase.from('jobs').delete().eq('id', job.id);
       if (error) throw error;
-      logAudit({ user, action: 'job.delete', entityType: 'job', entityId: job.id, details: { client: job.client_name } });
+      logAudit({
+        user, action: 'job.delete', entityType: 'job', entityId: job.id,
+        details: {
+          client: job.client_name,
+          service: job.service,
+          pipeline_status: job.pipeline_status,
+          pin_used: '3333',                 // always the owner PIN
+          authorized_by: user?.name || null, // whoever was logged in when the delete happened
+          authorized_by_role: user?.role || null,
+        },
+      });
       onJobDeleted?.(job);
       onClose?.();
     } catch (err) {
@@ -140,16 +168,21 @@ export default function JobFullView({
   }
 
   const pipelineKey = job.pipeline_status || 'new_lead';
-  const pipelinePalette = PIPELINE_BADGE[pipelineKey] || PIPELINE_BADGE.new_lead;
+  const pipelinePalette = pipelinePaletteFor(pipelineKey);
   const pipelineLabel = PIPELINE_STEP_LABEL[pipelineKey] || pipelineKey.replace('_', ' ');
 
-  // Tab order: Report first (landing), Details last
+  // Tab order (owner-requested):
+  // Report → Estimate → Contact → Documents → Time → Financials → Phases → Daily Logs → Details
+  // Estimate & Financials are gated to Owner/Operations/Admin (canSeeFinancials).
   const TABS = [
     { id: 'report',    label: 'Report',     icon: Sparkles },
-    { id: 'phases',    label: 'Phases',     icon: HardHat },
-    { id: 'daily',     label: 'Daily Logs', icon: FileText },
+    canSeeFinancials && { id: 'estimate',   label: 'Estimate',   icon: Receipt },
+    canContact       && { id: 'contact',    label: 'Contact',    icon: MessageSquare },
+    { id: 'documents', label: 'Documents',  icon: FolderClosed },
     { id: 'time',      label: 'Time',       icon: Clock },
     canSeeFinancials && { id: 'financials', label: 'Financials', icon: DollarSign },
+    { id: 'phases',    label: 'Phases',     icon: HardHat },
+    { id: 'daily',     label: 'Daily Logs', icon: FileText },
     { id: 'details',   label: 'Details',    icon: Info },
   ].filter(Boolean);
 
@@ -258,20 +291,26 @@ export default function JobFullView({
           {tab === 'report' && (
             <ProjectReportSection
               job={job}
+              user={user}
+              onJobUpdated={(u) => { setJob(u); onJobUpdated?.(u); }}
               onOpenQuestionnaire={onOpenQuestionnaire ? () => { onOpenQuestionnaire(job); onClose?.(); } : null}
             />
           )}
 
           {tab === 'phases' && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-              <h2 className="text-lg font-bold text-omega-charcoal mb-4 inline-flex items-center gap-2">
-                <HardHat className="w-4 h-4 text-omega-orange" /> Phase Breakdown
-              </h2>
-              <PhaseBreakdown
-                job={job}
-                user={user}
-                onJobUpdated={(u) => { setJob(u); onJobUpdated?.(u); }}
-              />
+            <div className="space-y-5">
+              <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+                <h2 className="text-lg font-bold text-omega-charcoal mb-4 inline-flex items-center gap-2">
+                  <HardHat className="w-4 h-4 text-omega-orange" /> Phase Breakdown
+                </h2>
+                <PhaseBreakdown
+                  job={job}
+                  user={user}
+                  onJobUpdated={(u) => { setJob(u); onJobUpdated?.(u); }}
+                />
+              </div>
+              {/* Materials list — Manager's shopping items for this job. */}
+              <MaterialsSection job={job} user={user} />
             </div>
           )}
 
@@ -293,9 +332,21 @@ export default function JobFullView({
             </div>
           )}
 
-          {tab === 'financials' && canSeeFinancials && (
+          {tab === 'documents' && (
+            <DocumentsSection
+              job={job}
+              user={user}
+              onJobUpdated={(u) => { setJob(u); onJobUpdated?.(u); }}
+            />
+          )}
+
+          {tab === 'contact' && canContact && (
+            <ContactSection job={job} user={user} />
+          )}
+
+          {tab === 'estimate' && canSeeFinancials && (
             <div className="space-y-5">
-              {/* Cost Projection — AI generated + HD materials */}
+              {/* Cost Projection — AI, read-only reference */}
               <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
                 <div className="flex items-start justify-between gap-2 mb-1 flex-wrap">
                   <h2 className="text-lg font-bold text-omega-charcoal inline-flex items-center gap-2">
@@ -304,7 +355,7 @@ export default function JobFullView({
                   <span className="text-[10px] px-2 py-0.5 rounded bg-omega-pale text-omega-orange font-semibold uppercase tracking-wider">AI · one-time</span>
                 </div>
                 <p className="text-xs text-omega-stone mb-4">
-                  AI-generated cost breakdown by phase and Home Depot CT material estimate. Generated once, cached.
+                  AI-generated cost breakdown from the questionnaire — use it as a reference while composing the estimate below.
                 </p>
                 <CostProjectionSection
                   job={job}
@@ -313,6 +364,17 @@ export default function JobFullView({
                 />
               </div>
 
+              {/* Estimate builder */}
+              <EstimateBuilder
+                job={job}
+                user={user}
+                onJobUpdated={(u) => { setJob(u); onJobUpdated?.(u); }}
+              />
+            </div>
+          )}
+
+          {tab === 'financials' && canSeeFinancials && (
+            <div className="space-y-5">
               {/* Manual Job Costing */}
               <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
                 <h2 className="text-lg font-bold text-omega-charcoal mb-1 inline-flex items-center gap-2">
@@ -461,6 +523,15 @@ function DetailsTab({
                 <label className="text-[10px] font-semibold text-omega-stone uppercase tracking-wider">{f.label}</label>
                 {f.type === 'textarea' ? (
                   <textarea value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                ) : f.type === 'phone' ? (
+                  <input
+                    type="tel"
+                    inputMode="tel"
+                    value={form[f.key] || ''}
+                    onChange={(e) => setForm({ ...form, [f.key]: formatPhoneInput(e.target.value) })}
+                    placeholder="(203) 555-1234"
+                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                  />
                 ) : (
                   <input type={f.type || 'text'} value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
                 )}

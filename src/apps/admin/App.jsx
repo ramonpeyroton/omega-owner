@@ -6,11 +6,17 @@ import CompanySettings from './screens/CompanySettings';
 import AuditLog from './screens/AuditLog';
 import MessageTemplates from './screens/MessageTemplates';
 import JarvisChat from '../../shared/components/JarvisChat';
+import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
+import { useBackNavHome } from '../../shared/lib/backNav';
 
 export default function App({ user, onLogout }) {
   const [screen, setScreen] = useState('users');
 
   const navigate = (s) => setScreen(s);
+
+  useBackNavHome(() => {
+    if (screen !== 'users') setScreen('users');
+  });
 
   const handleLogout = () => {
     setScreen('users');
@@ -24,6 +30,7 @@ export default function App({ user, onLogout }) {
       case 'company':   return <CompanySettings user={user} />;
       case 'audit':     return <AuditLog />;
       case 'templates': return <MessageTemplates user={user} />;
+      case 'calendar':  return <CalendarScreen user={user} />;
       default:          return <UsersAccess user={user} />;
     }
   };

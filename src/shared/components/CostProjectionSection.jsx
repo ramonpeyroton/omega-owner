@@ -55,15 +55,55 @@ RULES
 
 function safeParseJson(raw) {
   if (!raw) return null;
-  // Strip code fences if present
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
+  // Strip optional code fences
+  let cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
   try { return JSON.parse(cleaned); } catch { /* fall through */ }
-  // Try to pull out the first {...} block
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (match) {
-    try { return JSON.parse(match[0]); } catch { /* ignore */ }
+  // Try the first {...} block, greedy
+  const greedy = cleaned.match(/\{[\s\S]*\}/);
+  if (greedy) {
+    try { return JSON.parse(greedy[0]); } catch { /* fall through */ }
+  }
+  // Last resort: auto-close a truncated JSON object. Walks through the
+  // string counting braces/brackets outside of strings and appends the
+  // closers needed to balance. Trailing commas are stripped. This makes
+  // the output "mostly correct" when Claude hit max_tokens mid-materials.
+  const closed = tryCloseTruncatedJson(cleaned);
+  if (closed) {
+    try { return JSON.parse(closed); } catch { /* give up */ }
   }
   return null;
+}
+
+function tryCloseTruncatedJson(src) {
+  // Find the first '{' — everything before is garbage.
+  const start = src.indexOf('{');
+  if (start < 0) return null;
+  let out = src.slice(start);
+
+  const stack = [];
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < out.length; i++) {
+    const c = out[i];
+    if (escape) { escape = false; continue; }
+    if (c === '\\' && inString) { escape = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{' || c === '[') stack.push(c);
+    else if (c === '}' || c === ']') stack.pop();
+  }
+
+  // If we ended inside a string, close the string first.
+  if (inString) out += '"';
+  // Drop trailing comma / partial key so JSON doesn't complain.
+  out = out.replace(/,\s*$/, '').replace(/:\s*$/, ': null').replace(/,\s*"[^"]*$/, '');
+  // Close remaining opens in reverse.
+  while (stack.length) {
+    const open = stack.pop();
+    out += open === '{' ? '}' : ']';
+  }
+  return out;
 }
 
 export default function CostProjectionSection({ job, user, onJobUpdated }) {
@@ -80,7 +120,21 @@ export default function CostProjectionSection({ job, user, onJobUpdated }) {
   async function generate(isRegen = false) {
     setLoading(true);
     try {
-      const raw = await callAnthropicShared(buildPrompt(job), 2500);
+      // Prefill `{` forces Claude to start with raw JSON (no code fences,
+      // no preamble). 6000 tokens gives enough headroom for ~20 materials
+      // and 8+ phases without truncation. If we STILL get truncated, the
+      // parser will try to auto-close the JSON as a last resort.
+      let raw;
+      try {
+        raw = await callAnthropicShared(buildPrompt(job), 6000, { prefill: '{' });
+      } catch (err) {
+        // On truncation, retry once with more headroom.
+        if (err.code === 'MAX_TOKENS') {
+          raw = await callAnthropicShared(buildPrompt(job), 8000, { prefill: '{', allowTruncation: true });
+        } else {
+          throw err;
+        }
+      }
       const parsed = safeParseJson(raw);
       if (!parsed) throw new Error('AI returned an unreadable response. Try again.');
       const payload = {

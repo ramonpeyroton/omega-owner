@@ -12,6 +12,8 @@ import { supabase } from './lib/supabase';
 import PipelineKanban from '../../shared/components/PipelineKanban';
 import EstimateFlow from '../../shared/components/EstimateFlow';
 import JarvisChat from '../../shared/components/JarvisChat';
+import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
+import { useBackNavHome } from '../../shared/lib/backNav';
 
 export default function App({ user, onLogout }) {
   const [screen, setScreen] = useState('dashboard');
@@ -44,6 +46,14 @@ export default function App({ user, onLogout }) {
     setScreen(s);
     if (s === 'notifications') loadNotifCount();
   };
+
+  // Back button → step out of detail screens first, then land on Dashboard.
+  useBackNavHome(() => {
+    if (screen === 'job-detail' || screen === 'assign-subs' || screen === 'estimate-flow') {
+      setScreen('dashboard'); return;
+    }
+    if (screen !== 'dashboard') setScreen('dashboard');
+  });
 
   const renderScreen = () => {
     switch (screen) {
@@ -89,6 +99,8 @@ export default function App({ user, onLogout }) {
             onOpenEstimateFlow={(job) => { setSelectedJob(job); setScreen('estimate-flow'); }}
           />
         );
+      case 'calendar':
+        return <CalendarScreen user={user} />;
       case 'estimate-flow':
         return selectedJob
           ? <EstimateFlow job={selectedJob} user={user} onBack={() => setScreen('pipeline')} />

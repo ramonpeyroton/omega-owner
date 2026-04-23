@@ -11,6 +11,7 @@ const ADMIN_PIN = '0000';
 export default function AdminLogin({ onLogin }) {
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -26,7 +27,7 @@ export default function AdminLogin({ onLogin }) {
     setLoading(false);
 
     // Admin user is anonymous on purpose — no auditable name, generic label.
-    onLogin({ name: 'Admin', role: 'admin', _internal: true });
+    onLogin({ name: 'Admin', role: 'admin', _internal: true }, { remember });
   };
 
   return (
@@ -63,6 +64,17 @@ export default function AdminLogin({ onLogin }) {
               </button>
             </div>
           </div>
+
+          {/* Remember me — default OFF (30 days via localStorage when on). */}
+          <label className="flex items-center gap-2.5 select-none cursor-pointer pt-1">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+              className="w-4 h-4 rounded border-white/20 bg-white/5 text-red-500 focus:ring-red-500 focus:ring-offset-0 cursor-pointer"
+            />
+            <span className="text-sm text-white/60">Remember me on this device</span>
+          </label>
 
           {error && (
             <div className="px-4 py-3 rounded-xl bg-red-900/30 border border-red-500/30">

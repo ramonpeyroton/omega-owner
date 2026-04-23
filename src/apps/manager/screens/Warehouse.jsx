@@ -198,6 +198,95 @@ function EditModal({ item, onClose, onSaved }) {
   );
 }
 
+// ── New Item Modal (manual add) ───────────────────────────────────────────────
+// Quick-add UI that doesn't need a photo scan. Name is required;
+// everything else has sensible defaults. Returns the created row so
+// the parent can push it into local state without reloading.
+function NewItemModal({ onClose, onSaved }) {
+  const [name, setName]         = useState('');
+  const [category, setCategory] = useState('Other');
+  const [quantity, setQuantity] = useState('');
+  const [unit, setUnit]         = useState('units');
+  const [lowThreshold, setLow]  = useState('');
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState('');
+
+  const handleSave = async () => {
+    if (!name.trim()) { setError('Name is required'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      const { data, error: e } = await supabase.from('warehouse_items').insert([{
+        name: name.trim(),
+        category,
+        quantity: Number(quantity) || 0,
+        unit: unit.trim() || 'units',
+        low_stock_threshold: Number(lowThreshold) || 0,
+      }]).select().single();
+      if (e) throw e;
+      onSaved(data);
+    } catch (err) {
+      setError(err.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-end">
+      <div className="bg-white rounded-t-3xl w-full p-6 pb-8 max-h-[95vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-5">
+          <p className="font-bold text-omega-charcoal text-lg">New Item</p>
+          <button onClick={onClose} className="p-2 rounded-xl bg-gray-100 text-omega-stone"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-omega-stone uppercase tracking-wider mb-1.5 block">Name</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. 2x4 Pressure Treated 8ft"
+              className="w-full px-4 py-3.5 rounded-xl border border-gray-200 text-omega-charcoal text-base focus:outline-none focus:border-omega-orange"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-omega-stone uppercase tracking-wider mb-1.5 block">Category</label>
+              <select value={category} onChange={(e) => setCategory(e.target.value)}
+                className="w-full px-4 py-3.5 rounded-xl border border-gray-200 text-omega-charcoal text-sm focus:outline-none focus:border-omega-orange bg-white">
+                {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-omega-stone uppercase tracking-wider mb-1.5 block">Unit</label>
+              <input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="units"
+                className="w-full px-4 py-3.5 rounded-xl border border-gray-200 text-omega-charcoal text-base focus:outline-none focus:border-omega-orange" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-omega-stone uppercase tracking-wider mb-1.5 block">Starting Qty</label>
+              <input type="number" inputMode="decimal" min="0" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="0"
+                className="w-full px-4 py-3.5 rounded-xl border border-gray-200 text-omega-charcoal text-base focus:outline-none focus:border-omega-orange" />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-omega-stone uppercase tracking-wider mb-1.5 block">Low Alert</label>
+              <input type="number" inputMode="numeric" min="0" value={lowThreshold} onChange={(e) => setLow(e.target.value)} placeholder="0"
+                className="w-full px-4 py-3.5 rounded-xl border border-gray-200 text-omega-charcoal text-base focus:outline-none focus:border-omega-orange" />
+            </div>
+          </div>
+          {error && <p className="text-xs text-red-600 font-semibold">{error}</p>}
+        </div>
+        <button onClick={handleSave} disabled={saving || !name.trim()} className="w-full flex items-center justify-center gap-2 mt-5 py-4 rounded-xl bg-omega-orange text-white font-bold text-base hover:bg-omega-dark disabled:opacity-60 transition-colors">
+          {saving ? <LoadingSpinner size={18} color="text-white" /> : <Plus className="w-5 h-5" />}
+          Add Item
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── AI Scan ───────────────────────────────────────────────────────────────────
 function AIScanModal({ items, jobs, onClose, onAdd, userName }) {
   const [scanning, setScanning] = useState(false);
@@ -402,22 +491,78 @@ function AIScanModal({ items, jobs, onClose, onAdd, userName }) {
 }
 
 // ── Item Card (manager) ───────────────────────────────────────────────────────
-function ItemCard({ item, jobs, onUpdate, userName }) {
-  const [modal, setModal] = useState(null); // 'add' | 'remove' | 'edit'
-
-  const handleSaved = (updated) => {
-    onUpdate(updated);
-    setModal(null);
-  };
+// Inline numeric input replaces the old modal: tap "+" or "−", a number
+// keypad appears right on the card, and one tap confirms. No dialogs,
+// no free-text fields, no job-picker in the fast path. Edit still opens
+// a modal because renaming + category pick needs one.
+function ItemCard({ item, onUpdate, userName }) {
+  const [mode, setMode] = useState(null);      // 'add' | 'remove' | null
+  const [qtyInput, setQtyInput] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [editModal, setEditModal] = useState(false);
+  const [err, setErr] = useState('');
 
   const qty = item.quantity;
-  const qtyColor = qty <= 0 ? 'text-red-600' : qty <= item.low_stock_threshold ? 'text-amber-600' : 'text-green-600';
+  const qtyColor = qty <= 0
+    ? 'text-red-600'
+    : qty <= item.low_stock_threshold ? 'text-amber-600' : 'text-green-600';
+
+  function startMode(next) {
+    setMode(next);
+    setQtyInput('');
+    setErr('');
+    // Focus the input after React paints
+    setTimeout(() => {
+      const el = document.getElementById(`qty-${item.id}`);
+      if (el) { el.focus(); el.select?.(); }
+    }, 20);
+  }
+
+  function cancel() {
+    setMode(null);
+    setQtyInput('');
+    setErr('');
+  }
+
+  async function apply() {
+    const amount = parseFloat(qtyInput);
+    if (!Number.isFinite(amount) || amount <= 0) { setErr('Enter a positive number'); return; }
+    setSaving(true);
+    setErr('');
+    try {
+      const newQty = mode === 'add'
+        ? item.quantity + amount
+        : Math.max(0, item.quantity - amount);
+      await supabase.from('warehouse_items').update({ quantity: newQty }).eq('id', item.id);
+      await supabase.from('warehouse_transactions').insert([{
+        item_id: item.id,
+        transaction_type: mode === 'add' ? 'add' : 'remove',
+        quantity: amount,
+        user_name: userName,
+      }]);
+      onUpdate({ ...item, quantity: newQty });
+      cancel();
+    } catch (e) {
+      setErr(e.message || 'Failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter') { e.preventDefault(); apply(); }
+    if (e.key === 'Escape') cancel();
+  }
 
   return (
     <>
-      {modal === 'add' && <AddModal item={item} userName={userName} onClose={() => setModal(null)} onSaved={handleSaved} />}
-      {modal === 'remove' && <RemoveModal item={item} jobs={jobs} userName={userName} onClose={() => setModal(null)} onSaved={handleSaved} />}
-      {modal === 'edit' && <EditModal item={item} onClose={() => setModal(null)} onSaved={handleSaved} />}
+      {editModal && (
+        <EditModal
+          item={item}
+          onClose={() => setEditModal(false)}
+          onSaved={(u) => { onUpdate(u); setEditModal(false); }}
+        />
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-200 p-4">
         <div className="flex items-start justify-between gap-3 mb-3">
@@ -430,17 +575,73 @@ function ItemCard({ item, jobs, onUpdate, userName }) {
             <p className="text-xs text-omega-stone">{item.unit}</p>
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-2">
-          <button onClick={() => setModal('add')} className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs font-bold hover:bg-green-100 transition-colors">
-            <Plus className="w-3.5 h-3.5" />ADD
-          </button>
-          <button onClick={() => setModal('remove')} className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold hover:bg-red-100 transition-colors">
-            <Minus className="w-3.5 h-3.5" />REMOVE
-          </button>
-          <button onClick={() => setModal('edit')} className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-omega-slate text-xs font-bold hover:bg-gray-100 transition-colors">
-            <Edit2 className="w-3.5 h-3.5" />EDIT
-          </button>
-        </div>
+
+        {mode ? (
+          // Inline numeric input — no modal, no free-text. One tap to confirm.
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className={`text-[11px] font-bold uppercase tracking-wider px-2 py-1 rounded ${
+                mode === 'add' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {mode === 'add' ? 'Adding' : 'Removing'}
+              </span>
+              <input
+                id={`qty-${item.id}`}
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="any"
+                value={qtyInput}
+                onChange={(e) => setQtyInput(e.target.value)}
+                onKeyDown={handleKey}
+                placeholder={`# in ${item.unit}`}
+                className="flex-1 min-w-0 px-3 py-2 rounded-lg border-2 border-gray-200 focus:border-omega-orange focus:outline-none text-base font-semibold text-omega-charcoal"
+              />
+            </div>
+            {err && <p className="text-[11px] text-red-600 font-semibold">{err}</p>}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={cancel}
+                disabled={saving}
+                className="py-2.5 rounded-xl border border-gray-200 text-omega-slate text-xs font-bold hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={apply}
+                disabled={saving || !qtyInput}
+                className={`py-2.5 rounded-xl text-white text-xs font-bold disabled:opacity-60 ${
+                  mode === 'add' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'
+                }`}
+              >
+                {saving ? '…' : `${mode === 'add' ? '+ Add' : '− Remove'} ${qtyInput || '0'}`}
+              </button>
+            </div>
+          </div>
+        ) : (
+          // Uniform action row — 3 equal-width buttons, same height
+          // and styling. Icon + label on all so nothing looks orphaned.
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => startMode('add')}
+              className="inline-flex items-center justify-center gap-1.5 h-10 rounded-lg bg-green-50 border border-green-200 text-green-700 text-sm font-bold hover:bg-green-100 transition-colors"
+            >
+              <Plus className="w-4 h-4" /> Add
+            </button>
+            <button
+              onClick={() => startMode('remove')}
+              className="inline-flex items-center justify-center gap-1.5 h-10 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm font-bold hover:bg-red-100 transition-colors"
+            >
+              <Minus className="w-4 h-4" /> Remove
+            </button>
+            <button
+              onClick={() => setEditModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 h-10 rounded-lg bg-gray-50 border border-gray-200 text-omega-slate text-sm font-bold hover:bg-gray-100 transition-colors"
+            >
+              <Edit2 className="w-4 h-4" /> Edit
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
@@ -454,6 +655,7 @@ export default function Warehouse({ user, onNavigate }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('');
   const [showScan, setShowScan] = useState(false);
+  const [showNewItem, setShowNewItem] = useState(false);
   const [toast, setToast] = useState(null);
 
   useEffect(() => { loadAll(); }, []);
@@ -489,6 +691,16 @@ export default function Warehouse({ user, onNavigate }) {
     <div className="min-h-screen bg-omega-cloud pb-32">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       {showScan && <AIScanModal items={items} jobs={jobs} userName={user?.name || 'Manager'} onClose={() => setShowScan(false)} onAdd={handleScanAdd} />}
+      {showNewItem && (
+        <NewItemModal
+          onClose={() => setShowNewItem(false)}
+          onSaved={(row) => {
+            setItems((prev) => [row, ...prev]);
+            setShowNewItem(false);
+            setToast({ type: 'success', message: `${row.name} added` });
+          }}
+        />
+      )}
 
       <div className="bg-omega-charcoal px-5 pt-12 pb-6">
         <div className="flex items-center gap-3 mb-1">
@@ -511,8 +723,11 @@ export default function Warehouse({ user, onNavigate }) {
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search items..."
               className="w-full pl-9 pr-4 py-3 rounded-xl bg-white border border-gray-200 text-sm text-omega-charcoal focus:outline-none focus:border-omega-orange" />
           </div>
-          <button onClick={() => setShowScan(true)} className="flex items-center gap-2 px-4 py-3 rounded-xl bg-omega-orange text-white font-semibold text-sm hover:bg-omega-dark transition-colors">
-            <Camera className="w-4 h-4" />Scan
+          <button onClick={() => setShowNewItem(true)} className="flex items-center gap-1.5 px-3 py-3 rounded-xl bg-white border border-omega-orange text-omega-orange font-semibold text-sm hover:bg-omega-pale transition-colors">
+            <Plus className="w-4 h-4" /> New
+          </button>
+          <button onClick={() => setShowScan(true)} className="flex items-center gap-1.5 px-3 py-3 rounded-xl bg-omega-orange text-white font-semibold text-sm hover:bg-omega-dark transition-colors">
+            <Camera className="w-4 h-4" /> Scan
           </button>
         </div>
 

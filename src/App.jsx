@@ -8,13 +8,18 @@ import OperationsApp from './apps/operations/App';
 import AdminApp from './apps/admin/App';
 import ScreenApp from './apps/screen/App';
 import MarketingApp from './apps/marketing/App';
+import ReceptionistApp from './apps/receptionist/App';
+import EstimateView from './apps/estimate-view/EstimateView';
 import { useBackButtonGuard } from './shared/lib/backButtonGuard';
+import { dispatchBackNav } from './shared/lib/backNav';
+import {
+  PUBLIC_BUCKET, ADMIN_BUCKET,
+  loadSession, saveSession, clearSession,
+} from './shared/lib/authStorage';
 
-// Admin uses its own sessionStorage bucket so a public login doesn't clobber
+// Admin uses its own storage bucket so a public login doesn't clobber
 // an admin session and vice-versa. Admin is also reachable only via the
 // hidden path below — typing a PIN on the normal login won't work.
-const STORAGE_KEY = 'omega_unified_user';
-const ADMIN_STORAGE_KEY = 'omega_unified_admin';
 const ADMIN_PATH = '/admin-x9k2';
 
 export default function App() {
@@ -29,19 +34,19 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  const isAdminRoute = pathname === ADMIN_PATH || pathname.startsWith(`${ADMIN_PATH}/`);
+  const isAdminRoute    = pathname === ADMIN_PATH || pathname.startsWith(`${ADMIN_PATH}/`);
+  // Public, auth-less page for clients to view the estimate they were emailed.
+  const isEstimateView  = pathname.startsWith('/estimate-view/');
 
   // ─── Admin session (hidden route) ─────────────────────────────────
-  const [adminUser, setAdminUser] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem(ADMIN_STORAGE_KEY)); } catch { return null; }
-  });
+  const [adminUser, setAdminUser] = useState(() => loadSession(ADMIN_BUCKET));
 
-  const handleAdminLogin = (u) => {
-    sessionStorage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(u));
+  const handleAdminLogin = (u, { remember = false } = {}) => {
+    saveSession(ADMIN_BUCKET, u, remember);
     setAdminUser(u);
   };
   const handleAdminLogout = () => {
-    sessionStorage.removeItem(ADMIN_STORAGE_KEY);
+    clearSession(ADMIN_BUCKET);
     setAdminUser(null);
     // Send the admin back to the root so they can't accidentally share the hidden URL
     window.history.pushState({}, '', '/');
@@ -49,26 +54,28 @@ export default function App() {
   };
 
   // ─── Public session ───────────────────────────────────────────────
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY)); } catch { return null; }
-  });
+  const [user, setUser] = useState(() => loadSession(PUBLIC_BUCKET));
 
-  const handleLogin = (u) => {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(u));
+  const handleLogin = (u, { remember = false } = {}) => {
+    saveSession(PUBLIC_BUCKET, u, remember);
     setUser(u);
   };
   const handleLogout = () => {
-    sessionStorage.removeItem(STORAGE_KEY);
+    clearSession(PUBLIC_BUCKET);
     setUser(null);
   };
 
-  // Guard the browser back button once someone is logged in. The back
-  // button should never exit the SPA — if pressed, the user stays on the
-  // current screen. Internal navigation isn't affected because we don't
-  // push to history for it.
-  useBackButtonGuard(!!user || !!adminUser);
+  // Guard the browser back button once someone is logged in. Instead of
+  // just pinning in place, we dispatch a synthetic back-nav event — each
+  // role app registers a handler (via useBackNavHome) so back returns
+  // the user to THEIR dashboard instead of trapping them on a sub-page.
+  useBackButtonGuard(!!user || !!adminUser, (depth) => dispatchBackNav(depth));
 
   // ─── Render ───────────────────────────────────────────────────────
+  if (isEstimateView) {
+    return <EstimateView />;
+  }
+
   if (isAdminRoute) {
     if (!adminUser) return <AdminLogin onLogin={handleAdminLogin} />;
     return <AdminApp user={adminUser} onLogout={handleAdminLogout} />;
@@ -76,13 +83,14 @@ export default function App() {
 
   if (!user) return <Login onLogin={handleLogin} />;
 
-  if (user.role === 'owner')      return <OwnerApp       user={user} onLogout={handleLogout} />;
-  if (user.role === 'manager')    return <ManagerApp     user={user} onLogout={handleLogout} />;
-  if (user.role === 'sales')      return <SalesApp       user={user} onLogout={handleLogout} />;
-  if (user.role === 'salesperson') return <SalesApp      user={user} onLogout={handleLogout} />; // legacy alias
-  if (user.role === 'operations') return <OperationsApp  user={user} onLogout={handleLogout} />;
-  if (user.role === 'screen')     return <ScreenApp      user={user} onLogout={handleLogout} />;
-  if (user.role === 'marketing')  return <MarketingApp   user={user} onLogout={handleLogout} />;
+  if (user.role === 'owner')        return <OwnerApp        user={user} onLogout={handleLogout} />;
+  if (user.role === 'manager')      return <ManagerApp      user={user} onLogout={handleLogout} />;
+  if (user.role === 'sales')        return <SalesApp        user={user} onLogout={handleLogout} />;
+  if (user.role === 'salesperson')  return <SalesApp        user={user} onLogout={handleLogout} />; // legacy alias
+  if (user.role === 'operations')   return <OperationsApp   user={user} onLogout={handleLogout} />;
+  if (user.role === 'screen')       return <ScreenApp       user={user} onLogout={handleLogout} />;
+  if (user.role === 'marketing')    return <MarketingApp    user={user} onLogout={handleLogout} />;
+  if (user.role === 'receptionist') return <ReceptionistApp user={user} onLogout={handleLogout} />;
 
   // Admin is intentionally NOT accessible from the public route, even if
   // something seeds a sessionStorage value. Force logout.

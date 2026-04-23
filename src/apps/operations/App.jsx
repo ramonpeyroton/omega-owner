@@ -6,12 +6,18 @@ import SubcontractorManager from './screens/SubcontractorManager';
 import PipelineKanban from '../../shared/components/PipelineKanban';
 import EstimateFlow from '../../shared/components/EstimateFlow';
 import JarvisChat from '../../shared/components/JarvisChat';
+import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
+import { useBackNavHome } from '../../shared/lib/backNav';
 
 export default function App({ user, onLogout }) {
   const [screen, setScreen] = useState('dashboard');
   const [selectedJob, setSelectedJob] = useState(null);
 
   const navigate = (s) => setScreen(s);
+
+  useBackNavHome(() => {
+    if (screen !== 'dashboard') setScreen('dashboard');
+  });
 
   const handleLogout = () => {
     setScreen('dashboard');
@@ -38,6 +44,8 @@ export default function App({ user, onLogout }) {
         return <SubcontractorManager user={user} />;
       case 'pipeline':
         return <PipelineKanban user={user} filterBySalesperson={false} onOpenEstimateFlow={openEstimate} />;
+      case 'calendar':
+        return <CalendarScreen user={user} />;
       default:
         return <Dashboard onOpenEstimate={openEstimate} onNavigate={navigate} user={user} />;
     }

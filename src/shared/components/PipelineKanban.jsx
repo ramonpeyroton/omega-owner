@@ -10,38 +10,57 @@ import {
   useDraggable,
   useDroppable,
 } from '@dnd-kit/core';
-import { Search, Filter, AlertTriangle } from 'lucide-react';
+import { Search, Filter, AlertTriangle, PhoneIncoming, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from './LoadingSpinner';
 import Toast from './Toast';
 import JobFullView from './JobFullView';
-import { PIPELINE_STEP_LABEL } from '../config/phaseBreakdown';
+import DeleteJobModal from './DeleteJobModal';
+import { PIPELINE_STEP_LABEL, PIPELINE_COLORS, PIPELINE_ORDER } from '../config/phaseBreakdown';
 import { logAudit } from '../lib/audit';
 
+// Only Owner, Operations and Admin can initiate a delete from the card.
+// The actual PIN (3333) is still required inside DeleteJobModal.
+const CAN_DELETE_JOB = new Set(['owner', 'operations', 'admin']);
+
 // ─── Pipeline columns (order matters) ──────────────────────────────
-export const PIPELINE_COLUMNS = [
-  { id: 'new_lead',           label: 'New Lead',          headerBg: 'bg-gray-400',    headerText: 'text-white',   colBg: 'bg-gray-50' },
-  { id: 'estimate_sent',      label: 'Estimate Sent',     headerBg: 'bg-blue-500',    headerText: 'text-white',   colBg: 'bg-blue-50/60' },
-  { id: 'estimate_approved',  label: 'Estimate Approved', headerBg: 'bg-purple-500',  headerText: 'text-white',   colBg: 'bg-purple-50/60' },
-  { id: 'contract_sent',      label: 'Contract Sent',     headerBg: 'bg-omega-orange',headerText: 'text-white',   colBg: 'bg-omega-pale' },
-  { id: 'contract_signed',    label: 'Contract Signed',   headerBg: 'bg-amber-400',   headerText: 'text-white',   colBg: 'bg-amber-50' },
-  { id: 'in_progress',        label: 'In Progress',       headerBg: 'bg-green-400',   headerText: 'text-white',   colBg: 'bg-green-50' },
-  { id: 'completed',          label: 'Completed',         headerBg: 'bg-green-700',   headerText: 'text-white',   colBg: 'bg-green-100/60' },
-  { id: 'on_hold',            label: 'On Hold',           headerBg: 'bg-red-500',     headerText: 'text-white',   colBg: 'bg-red-50' },
-];
+// Kept as a derived constant so color + order live in ONE place
+// (`phaseBreakdown.js`). Anyone needing column metadata imports
+// PIPELINE_COLUMNS from here as before.
+export const PIPELINE_COLUMNS = PIPELINE_ORDER.map((id) => ({
+  id,
+  label: PIPELINE_STEP_LABEL[id] || id,
+  headerBg: PIPELINE_COLORS[id]?.tailwindBg || 'bg-gray-400',
+  headerText: 'text-white',
+  colBg: PIPELINE_COLORS[id]?.soft || 'bg-gray-50',
+}));
 
 // ─── Job Card (simplified) ─────────────────────────────────────────
-function JobCard({ job, coiWarning, onOpen, isDragging }) {
+function JobCard({ job, coiWarning, onOpen, onDelete, canDelete, isDragging }) {
   const address = [job.address, job.city].filter(Boolean).join(', ');
-  const step = PIPELINE_STEP_LABEL[job.pipeline_status || 'new_lead'] || 'Review Estimate';
+  const step = PIPELINE_STEP_LABEL[job.pipeline_status || 'new_lead'] || 'New Lead';
+  const calledIn = job.created_by === 'receptionist';
   return (
     <div
       onClick={(e) => { if (!isDragging) onOpen(job); }}
-      className={`group select-none bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing ${
+      className={`group relative select-none bg-white border border-gray-200 rounded-lg p-2.5 shadow-sm hover:shadow-md transition-shadow cursor-grab active:cursor-grabbing ${
         isDragging ? 'opacity-60' : ''
       }`}
     >
-      <div className="flex items-start justify-between gap-1">
+      {/* Delete (trash icon) — hidden until hover, never blocks drag. */}
+      {canDelete && !isDragging && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}    // don't start a drag
+          onClick={(e) => { e.stopPropagation(); onDelete?.(job); }}
+          className="absolute top-1.5 right-1.5 p-1 rounded-md text-omega-stone/40 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+          title="Delete job (requires Owner PIN)"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
+
+      <div className="flex items-start justify-between gap-1 pr-5">
         <p className="font-bold text-sm text-omega-charcoal truncate flex-1">{job.client_name || job.name || 'Untitled'}</p>
         {coiWarning && <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" title="Sub with COI expiring" />}
       </div>
@@ -51,6 +70,14 @@ function JobCard({ job, coiWarning, onOpen, isDragging }) {
         {job.service && (
           <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-omega-pale text-omega-orange font-semibold text-[10px] uppercase">
             {job.service}
+          </span>
+        )}
+        {calledIn && (
+          <span
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold text-[10px] uppercase"
+            title="Called in to reception"
+          >
+            <PhoneIncoming className="w-2.5 h-2.5" /> Called In
           </span>
         )}
       </div>
@@ -99,6 +126,9 @@ export default function PipelineKanban({ user, filterBySalesperson = false, read
   const [overColumn, setOverColumn] = useState(null);
   const [savingId, setSavingId] = useState(null);
   const [openJob, setOpenJob] = useState(null);
+  const [deleteJob, setDeleteJob] = useState(null);
+
+  const canDelete = !readOnly && CAN_DELETE_JOB.has(user?.role);
 
   // Filters
   const [searchText, setSearchText] = useState('');
@@ -343,6 +373,8 @@ export default function PipelineKanban({ user, filterBySalesperson = false, read
                               job={j}
                               coiWarning={coiWarningByJob.has(j.id)}
                               onOpen={readOnly ? () => {} : setOpenJob}
+                              onDelete={setDeleteJob}
+                              canDelete={canDelete}
                               isDragging={isDragging}
                             />
                           )}
@@ -388,6 +420,19 @@ export default function PipelineKanban({ user, filterBySalesperson = false, read
           }}
           onOpenEstimateFlow={onOpenEstimateFlow}
           onOpenQuestionnaire={onOpenQuestionnaire}
+        />
+      )}
+
+      {deleteJob && (
+        <DeleteJobModal
+          job={deleteJob}
+          user={user}
+          onClose={() => setDeleteJob(null)}
+          onDeleted={(d) => {
+            setJobs((prev) => prev.filter((j) => j.id !== d.id));
+            setDeleteJob(null);
+            setToast({ type: 'success', message: 'Job deleted' });
+          }}
         />
       )}
     </div>

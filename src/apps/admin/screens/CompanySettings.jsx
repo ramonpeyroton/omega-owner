@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Save, Upload } from 'lucide-react';
+import { Save, Upload, Target } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Toast from '../components/Toast';
 import { logAudit } from '../../../shared/lib/audit';
+import { getSettingNumber, setSetting } from '../../../shared/lib/settings';
+
+const GOAL_KEY = 'annual_goal_2026';
 
 const FIELDS = [
   { key: 'company_name',    label: 'Company Name' },
@@ -20,6 +23,8 @@ export default function CompanySettings({ user }) {
   const [uploading, setUploading] = useState(false);
   const [row, setRow] = useState(null);
   const [form, setForm] = useState({});
+  const [goal, setGoal] = useState('6000000');
+  const [savingGoal, setSavingGoal] = useState(false);
   const [toast, setToast] = useState(null);
 
   useEffect(() => { load(); }, []);
@@ -27,21 +32,43 @@ export default function CompanySettings({ user }) {
   async function load() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('company_settings')
-        .select('*')
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (error) throw error;
+      const [settingsRes, goalValue] = await Promise.all([
+        supabase
+          .from('company_settings')
+          .select('*')
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        getSettingNumber(GOAL_KEY, 6_000_000),
+      ]);
+      if (settingsRes.error) throw settingsRes.error;
+      const data = settingsRes.data;
       setRow(data || null);
       const base = {};
       FIELDS.forEach((f) => { base[f.key] = data?.[f.key] || ''; });
       setForm(base);
+      setGoal(String(goalValue || 0));
     } catch (err) {
       setToast({ type: 'error', message: err.message || 'Failed to load' });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function saveGoal() {
+    const n = Number(String(goal).replace(/[^0-9.]/g, ''));
+    if (!Number.isFinite(n) || n < 0) {
+      setToast({ type: 'error', message: 'Goal must be a positive number' });
+      return;
+    }
+    setSavingGoal(true);
+    const ok = await setSetting(GOAL_KEY, Math.round(n), user);
+    setSavingGoal(false);
+    if (ok) {
+      logAudit({ user, action: 'settings.goal.update', entityType: 'app_settings', details: { value: n } });
+      setToast({ type: 'success', message: 'Annual goal updated' });
+    } else {
+      setToast({ type: 'error', message: 'Failed to save goal' });
     }
   }
 
@@ -103,7 +130,42 @@ export default function CompanySettings({ user }) {
         <p className="text-sm text-omega-stone mt-1">General company info used in contracts and communications</p>
       </header>
 
-      <div className="p-6 md:p-8 max-w-2xl">
+      <div className="p-6 md:p-8 max-w-2xl space-y-6">
+
+        {/* ─── Annual sales goal ───────────────────────────────── */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <div className="flex items-center gap-2 mb-1">
+            <Target className="w-4 h-4 text-omega-orange" />
+            <h2 className="text-base font-bold text-omega-charcoal">Annual Sales Goal</h2>
+          </div>
+          <p className="text-xs text-omega-stone mb-3">
+            Shown on the office Screen dashboard. YTD revenue is compared against this number.
+          </p>
+          <div className="flex items-center gap-2">
+            <span className="text-omega-stone text-lg font-bold">$</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value.replace(/[^0-9]/g, ''))}
+              placeholder="6000000"
+              className="flex-1 px-3 py-2 rounded-lg border border-gray-200 text-base font-mono tracking-tight"
+            />
+            <button
+              onClick={saveGoal}
+              disabled={savingGoal}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60"
+            >
+              <Save className="w-4 h-4" /> {savingGoal ? 'Saving…' : 'Save Goal'}
+            </button>
+          </div>
+          <p className="text-[11px] text-omega-stone mt-2">
+            Preview: <span className="font-bold text-omega-charcoal">
+              ${Number(goal || 0).toLocaleString()}
+            </span>
+          </p>
+        </div>
+
         <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
           <div>
             <label className="text-xs font-semibold text-omega-stone uppercase">Logo</label>

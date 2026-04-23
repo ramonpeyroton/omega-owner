@@ -15,6 +15,7 @@ import { formatPhoneInput, toE164 } from '../lib/phone';
 export default function PhoneInput({
   value,
   onChange,
+  onBlur,
   placeholder = '(203) 555-1234',
   className = '',
   withIcon = true,
@@ -34,6 +35,7 @@ export default function PhoneInput({
       autoComplete="tel"
       value={value || ''}
       onChange={handleChange}
+      onBlur={onBlur}
       placeholder={placeholder}
       autoFocus={autoFocus}
       required={required}

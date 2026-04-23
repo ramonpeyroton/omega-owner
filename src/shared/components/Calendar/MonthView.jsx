@@ -5,6 +5,25 @@ import {
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// Parse an event title into a {primary, secondary} pair so the grid can
+// show the client name in bold and the event type in a dimmer line.
+// Handles three shapes:
+//   1. "Client Name — Sales Visit"  → new format (client first)
+//   2. "Sales Visit — Client Name"  → legacy format
+//   3. Anything else                → primary = raw title, no secondary
+function parseEventTitle(rawTitle, kindLabel) {
+  const title = (rawTitle || '').trim();
+  if (!kindLabel) return { primary: title, secondary: '' };
+  const dash = ' — ';
+  if (title.toLowerCase().startsWith(kindLabel.toLowerCase() + dash)) {
+    return { primary: title.slice(kindLabel.length + dash.length), secondary: kindLabel };
+  }
+  if (title.toLowerCase().endsWith(dash + kindLabel.toLowerCase())) {
+    return { primary: title.slice(0, -kindLabel.length - dash.length), secondary: kindLabel };
+  }
+  return { primary: title, secondary: '' };
+}
+
 /**
  * Full month grid. Each cell shows up to 3 event dots + "+N more" badge.
  * Click a day → `onDayClick(iso)`. The cell for today gets a subtle
@@ -85,22 +104,30 @@ export default function MonthView({
                 )}
               </div>
 
-              <div className="mt-1 space-y-0.5">
+              <div className="mt-1 space-y-1">
                 {visible.map((e) => {
-                  const meta = EVENT_KIND_META[e.kind] || { color: '#6B7280' };
+                  const meta = EVENT_KIND_META[e.kind] || { color: '#6B7280', label: e.kind };
+                  const { primary, secondary } = parseEventTitle(e.title, meta.label);
                   return (
                     <div
                       key={e.id}
-                      className="flex items-center gap-1 text-[10px] leading-tight truncate"
+                      className="relative pl-2 py-0.5 pr-1 rounded-[4px] bg-white border-l-[3px] shadow-[0_1px_0_rgba(0,0,0,0.04)] overflow-hidden"
+                      style={{ borderLeftColor: meta.color, background: meta.color + '14' }}
                       title={e.title}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: meta.color }} />
-                      <span className="text-omega-charcoal truncate">{e.title}</span>
+                      <div className="text-[11px] leading-tight font-bold text-omega-charcoal truncate">
+                        {primary}
+                      </div>
+                      {secondary && (
+                        <div className="text-[9px] leading-tight font-semibold uppercase tracking-wider truncate" style={{ color: meta.color }}>
+                          {secondary}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
                 {extra > 0 && (
-                  <div className="text-[9px] font-bold text-omega-orange">+{extra} more</div>
+                  <div className="text-[9px] font-bold text-omega-orange pl-0.5">+{extra} more</div>
                 )}
               </div>
             </button>

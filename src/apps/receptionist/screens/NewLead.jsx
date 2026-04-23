@@ -1,46 +1,33 @@
 import { useState } from 'react';
 import {
-  Mail, MapPin, Hammer, Users, UserCheck,
-  Send, CheckCircle2, Plus, List, CalendarPlus,
+  Mail, MapPin, Hammer, Users, UserCheck, Calendar as CalendarIcon,
+  Send, CheckCircle2, Plus, List, CalendarPlus, AlertTriangle,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Toast from '../components/Toast';
 import PhoneInput from '../../../shared/components/PhoneInput';
 import { toE164 } from '../../../shared/lib/phone';
 import { logAudit } from '../../../shared/lib/audit';
+import { CITIES, SERVICES, LEAD_SOURCES } from '../lib/leadCatalog';
 
-// ─── Catalog values shared by both the form and the success card ────
-const CITIES = [
-  'Stamford', 'Greenwich', 'Darien', 'New Canaan', 'Westport',
-  'Norwalk', 'Fairfield', 'Bridgeport', 'Trumbull', 'Shelton', 'Other',
-];
-
-const SERVICES = [
-  { value: 'bathroom',       label: 'Bathroom Renovation' },
-  { value: 'kitchen',        label: 'Kitchen Renovation'  },
-  { value: 'addition',       label: 'Home Addition'       },
-  { value: 'deck',           label: 'Deck / Patio'        },
-  { value: 'roofing',        label: 'Roofing'             },
-  { value: 'driveway',       label: 'Driveway'            },
-  { value: 'basement',       label: 'Basement Finishing'  },
-  { value: 'fullreno',       label: 'Full Renovation'     },
-  { value: 'newconstruction',label: 'New Construction'    },
-];
-
-const LEAD_SOURCES = [
-  'Google', 'Referral', 'HomeAdvisor', 'Angie\'s List',
-  'Door to Door', 'Social Media', 'Repeat Client', 'Drove By', 'Other',
-];
+function todayIso() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
 
 const DEFAULT_FORM = {
+  lead_date: todayIso(),
   first_name: '',
   last_name: '',
   phone: '',
   email: '',
   address: '',
+  unit_number: '',
   city: '',
   zip: '',
-  service: '',
+  services: [],           // ← multi-select; services[0] persists in `service`
   lead_source: '',
   referral_name: '',
   notes: '',
@@ -92,23 +79,64 @@ function ChoiceButton({ label, selected, onClick }) {
   );
 }
 
+function fmtShortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
+}
+
 // ─── Main screen ─────────────────────────────────────────────────────
 export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }) {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [created, setCreated] = useState(null); // created job row on success
+  const [phoneDup, setPhoneDup] = useState(null); // { client_name, lead_date, created_at } | null
+  const [checkingPhone, setCheckingPhone] = useState(false);
 
   function set(k, v) { setForm((f) => ({ ...f, [k]: v })); }
 
+  function toggleService(v) {
+    setForm((f) => {
+      const has = f.services.includes(v);
+      return { ...f, services: has ? f.services.filter((x) => x !== v) : [...f.services, v] };
+    });
+  }
+
+  // Checks whether another job already exists with the same phone (E.164).
+  // Fires on blur of the phone field. Blocks Save when a match is found.
+  async function checkPhoneDuplicate(raw) {
+    const e164 = toE164(raw);
+    if (!e164) { setPhoneDup(null); return; }
+    setCheckingPhone(true);
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('id, client_name, lead_date, created_at')
+        .eq('client_phone', e164)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      setPhoneDup(data || null);
+    } catch {
+      // Non-fatal — if the check fails, let the user proceed; the DB
+      // unique-ness is not enforced, so we fall back to "warn only".
+      setPhoneDup(null);
+    } finally {
+      setCheckingPhone(false);
+    }
+  }
+
   function validate() {
     const missing = [];
+    if (!form.lead_date)         missing.push('Lead date');
     if (!form.first_name.trim()) missing.push('First name');
     if (!form.last_name.trim())  missing.push('Last name');
     if (!form.phone.trim())      missing.push('Phone');
     if (!form.address.trim())    missing.push('Street address');
     if (!form.city)              missing.push('City');
-    if (!form.service)           missing.push('Service');
+    if (!form.services.length)   missing.push('Service');
     return missing;
   }
 
@@ -118,23 +146,35 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
       setToast({ type: 'warning', message: `Missing: ${missing.join(', ')}` });
       return;
     }
+    if (phoneDup) {
+      setToast({ type: 'error', message: 'This phone is already on file — check My Leads.' });
+      return;
+    }
     setSaving(true);
     try {
       const clientName = `${form.first_name.trim()} ${form.last_name.trim()}`.trim();
-      const fullAddress = [form.address.trim(), form.city, 'CT', form.zip.trim()]
+      const streetLine = form.unit_number.trim()
+        ? `${form.address.trim()} ${form.unit_number.trim()}`
+        : form.address.trim();
+      const fullAddress = [streetLine, form.city, 'CT', form.zip.trim()]
         .filter(Boolean).join(', ');
       const assigned = form.assigned_to === 'Other' ? form.assigned_to_custom.trim() : form.assigned_to;
 
       // Normalize phone to E.164 for Twilio. Keep raw for display only.
       const e164 = toE164(form.phone) || form.phone.trim();
 
+      const [primary, ...extra] = form.services;
+
       const jobRow = {
+        lead_date:            form.lead_date || null,
         client_name:          clientName,
         client_phone:         e164,
         client_email:         form.email.trim() || null,
         address:              fullAddress,
+        unit_number:          form.unit_number.trim() || null,
         city:                 form.city,
-        service:              form.service,
+        service:              primary,
+        additional_services:  extra.length ? extra : null,
         pipeline_status:      'new_lead',
         status:               'new_lead',
         lead_source:          form.lead_source || null,
@@ -152,19 +192,20 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
 
       // Notify sales (best-effort — table exists).
       try {
+        const servicesLabel = form.services.map(serviceLabel).join(', ');
         await supabase.from('notifications').insert([{
           job_id:         job.id,
           recipient_role: 'sales',
           type:           'new_lead',
           title:          `New Lead — ${clientName}`,
-          message:        `${serviceLabel(form.service)} in ${form.city}. Phone: ${e164}. ${form.notes.trim() ? 'Notes: ' + form.notes.trim().slice(0, 200) : ''}`.trim(),
+          message:        `${servicesLabel} in ${form.city}. Phone: ${e164}. ${form.notes.trim() ? 'Notes: ' + form.notes.trim().slice(0, 200) : ''}`.trim(),
           seen:           false,
         }]);
       } catch { /* notifications table may be stricter — non-fatal */ }
 
       logAudit({
         user, action: 'lead.create', entityType: 'job', entityId: job.id,
-        details: { client: clientName, service: form.service, city: form.city },
+        details: { client: clientName, services: form.services, city: form.city },
       });
 
       setCreated(job);
@@ -181,6 +222,8 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
   if (created) {
     const clientName = created.client_name;
     const assigned = created.assigned_to || 'the salesperson';
+    const allServices = [created.service, ...(Array.isArray(created.additional_services) ? created.additional_services : [])]
+      .filter(Boolean).map(serviceLabel).join(', ');
     return (
       <div className="flex-1 flex flex-col bg-omega-cloud overflow-y-auto">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
@@ -198,7 +241,7 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
             <Row label="Client"   value={clientName} />
             <Row label="Phone"    value={created.client_phone} />
             {created.client_email && <Row label="Email" value={created.client_email} />}
-            <Row label="Service"  value={serviceLabel(created.service)} />
+            <Row label="Service"  value={allServices} />
             <Row label="Location" value={created.address} />
             {created.lead_source && <Row label="Source" value={created.lead_source} />}
             <Row label="Assigned to" value={assigned} />
@@ -214,7 +257,7 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
               <CalendarPlus className="w-5 h-5" /> Schedule Visit with {assigned}
             </button>
             <button
-              onClick={() => { setCreated(null); setForm(DEFAULT_FORM); }}
+              onClick={() => { setCreated(null); setForm(DEFAULT_FORM); setPhoneDup(null); }}
               className="w-full inline-flex items-center justify-center gap-2 px-5 py-4 rounded-2xl bg-white border border-gray-200 hover:border-omega-orange text-omega-charcoal font-semibold text-base"
             >
               <Plus className="w-5 h-5" /> Create Another Lead
@@ -232,6 +275,8 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
   }
 
   // ─── FORM screen ──────────────────────────────────────────────────
+  const canSave = !saving && !phoneDup;
+
   return (
     <div className="flex-1 flex flex-col bg-omega-cloud overflow-y-auto">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
@@ -242,6 +287,19 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
       </header>
 
       <main className="flex-1 px-4 sm:px-6 py-5 max-w-xl mx-auto w-full space-y-4">
+
+        {/* SECTION 0 — Lead Date (default today, editable to backfill old leads) */}
+        <Section title="Lead Date" icon={CalendarIcon}>
+          <Field label="Date lead was captured" required hint="Defaults to today. Change it when backfilling older leads.">
+            <input
+              type="date"
+              className={inputCls}
+              value={form.lead_date}
+              max={todayIso()}
+              onChange={(e) => set('lead_date', e.target.value)}
+            />
+          </Field>
+        </Section>
 
         {/* SECTION 1 — Client Info */}
         <Section title="Client Info" icon={UserCheck}>
@@ -256,9 +314,31 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
           <Field label="Phone" required>
             <PhoneInput
               value={form.phone}
-              onChange={(v) => set('phone', v)}
+              onChange={(v) => { set('phone', v); if (phoneDup) setPhoneDup(null); }}
+              onBlur={() => checkPhoneDuplicate(form.phone)}
               className={inputCls}
             />
+            {checkingPhone && (
+              <p className="text-[11px] text-omega-stone mt-1">Checking for existing lead…</p>
+            )}
+            {phoneDup && (
+              <div className="mt-2 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs">
+                  <p className="font-bold text-red-700">Lead already exists for this phone</p>
+                  <p className="text-red-700/90 mt-0.5">
+                    {phoneDup.client_name} · {fmtShortDate(phoneDup.lead_date || phoneDup.created_at)}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onViewLeads}
+                    className="mt-1 text-[11px] font-bold text-red-700 underline hover:text-red-800"
+                  >
+                    Check My Leads →
+                  </button>
+                </div>
+              </div>
+            )}
           </Field>
           <Field label="Email">
             <div className="relative">
@@ -272,6 +352,9 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
         <Section title="Service Location" icon={MapPin}>
           <Field label="Street Address" required>
             <input className={inputCls} value={form.address} onChange={(e) => set('address', e.target.value)} placeholder="123 Main St" />
+          </Field>
+          <Field label="Unit #" hint="Apt, Suite, Unit — leave blank for a single-family home.">
+            <input className={inputCls} value={form.unit_number} onChange={(e) => set('unit_number', e.target.value)} placeholder="Apt 4B" />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="City" required>
@@ -289,22 +372,25 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
           </Field>
         </Section>
 
-        {/* SECTION 3 — Service Interest */}
+        {/* SECTION 3 — Service Interest (multi-select) */}
         <Section title="Service Interest" icon={Hammer}>
+          <p className="text-xs text-omega-stone -mt-2 mb-1">Select all services the client asked about.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {SERVICES.map((s) => (
               <ChoiceButton
                 key={s.value}
                 label={s.label}
-                selected={form.service === s.value}
-                onClick={() => set('service', s.value)}
+                selected={form.services.includes(s.value)}
+                onClick={() => toggleService(s.value)}
               />
             ))}
           </div>
+          {form.services.length > 1 && (
+            <p className="text-[11px] text-omega-stone mt-1">
+              {form.services.length} services selected. Primary: <strong>{serviceLabel(form.services[0])}</strong>.
+            </p>
+          )}
         </Section>
-
-        {/* Visit scheduling was here; it moved to the Calendar — after
-            Save the success screen routes straight to the event form. */}
 
         {/* SECTION 5 — Lead Info */}
         <Section title="Lead Info" icon={Users}>
@@ -342,11 +428,11 @@ export default function NewLead({ user, onLogout, onViewLeads, onScheduleVisit }
         <div className="pt-2 pb-8">
           <button
             onClick={submit}
-            disabled={saving}
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-4 rounded-2xl bg-omega-orange hover:bg-omega-dark disabled:opacity-60 text-white font-bold text-base shadow-lg shadow-omega-orange/25"
+            disabled={!canSave}
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-4 rounded-2xl bg-omega-orange hover:bg-omega-dark disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-base shadow-lg shadow-omega-orange/25"
           >
             <Send className="w-5 h-5" />
-            {saving ? 'Creating…' : 'CREATE LEAD & NOTIFY SALESPERSON'}
+            {saving ? 'Creating…' : phoneDup ? 'Duplicate phone — cannot save' : 'CREATE LEAD & NOTIFY SALESPERSON'}
           </button>
         </div>
       </main>

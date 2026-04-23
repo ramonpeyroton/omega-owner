@@ -70,10 +70,12 @@ export default function EventForm({ user, initialIso, initialEvent, prefillJob, 
   useEffect(() => {
     if (!autoTitle) return;
     const kindLabel = EVENT_KIND_META[kind]?.label || kind;
-    const jobPart = prefillJob
-      ? ` — ${prefillJob.client_name || prefillJob.name || 'job'}`
+    // Put the client name FIRST so it survives truncation on tablets
+    // and is the thing the eye lands on in the month grid.
+    const namePart = prefillJob
+      ? (prefillJob.client_name || prefillJob.name || '')
       : '';
-    setTitle(`${kindLabel}${jobPart}`);
+    setTitle(namePart ? `${namePart} — ${kindLabel}` : kindLabel);
   }, [kind, prefillJob, autoTitle]);
 
   async function submit() {

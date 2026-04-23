@@ -1,4 +1,4 @@
-import { Users, DollarSign, Settings, FileText, MessageSquare, LogOut, Calendar } from 'lucide-react';
+import { Users, DollarSign, Settings, FileText, MessageSquare, LogOut, Calendar, Monitor } from 'lucide-react';
 import Logo from './Logo';
 import NotificationsBell from '../../../shared/components/NotificationsBell';
 
@@ -9,6 +9,7 @@ const NAV = [
   { id: 'audit',     label: 'Audit Log',         icon: FileText },
   { id: 'templates', label: 'Message Templates', icon: MessageSquare },
   { id: 'calendar',  label: 'Calendar',          icon: Calendar },
+  { id: 'screen',    label: 'TV Dashboard',      icon: Monitor },
 ];
 
 export default function Sidebar({ screen, onNavigate, onLogout, userName, user }) {

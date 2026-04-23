@@ -61,6 +61,37 @@ async function kpiFor(range, prev) {
 export async function loadWeekKpi() { return kpiFor(weekRange(),  prevWeekRange());  }
 export async function loadMonthKpi() { return kpiFor(monthRange(), prevMonthRange()); }
 
+// ─── Pipeline value ────────────────────────────────────────────────
+// Total $ currently "in motion": sum of the latest estimate for each
+// active job. Excludes jobs marked LOST (`estimate_rejected`) or
+// already closed out (`completed`).
+export async function loadPipelineValue() {
+  try {
+    const { data: jobs } = await supabase
+      .from('jobs')
+      .select('id')
+      .not('pipeline_status', 'in', '("estimate_rejected","completed")');
+    const ids = (jobs || []).map((j) => j.id);
+    if (!ids.length) return 0;
+
+    const { data: ests } = await supabase
+      .from('estimates')
+      .select('job_id, total_amount, created_at')
+      .in('job_id', ids)
+      .order('created_at', { ascending: false });
+
+    // Dedupe — keep latest estimate per job only.
+    const seen = new Set();
+    let total = 0;
+    for (const e of ests || []) {
+      if (seen.has(e.job_id)) continue;
+      seen.add(e.job_id);
+      total += Number(e.total_amount) || 0;
+    }
+    return total;
+  } catch { return 0; }
+}
+
 // ─── Active projects (in_progress with % done) ─────────────────────
 export async function loadActiveProjects(limit = 5) {
   try {

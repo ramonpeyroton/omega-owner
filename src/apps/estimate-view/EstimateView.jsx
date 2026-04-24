@@ -194,10 +194,11 @@ export default function EstimateView() {
             existingSignature={
               estimate.signature_png
                 ? {
-                    png: estimate.signature_png,
+                    png:  estimate.signature_png,
                     name: estimate.signed_by,
-                    at: estimate.signed_at,
-                    ip: estimate.signed_ip,
+                    at:   estimate.signed_at,
+                    date: estimate.signed_date,
+                    ip:   estimate.signed_ip,
                   }
                 : null
             }
@@ -232,6 +233,7 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
   const [hasInk, setHasInk] = useState(false);
 
   const [printedName, setPrintedName] = useState(customerName || '');
+  const [signedDate, setSignedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [consent, setConsent] = useState(false);
 
   // `signed` renders the locked receipt. Seeded from `existingSignature`
@@ -239,7 +241,12 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
   // gets populated on successful API response.
   const [signed, setSigned] = useState(
     existingSignature
-      ? { png: existingSignature.png, name: existingSignature.name, at: existingSignature.at }
+      ? {
+          png:  existingSignature.png,
+          name: existingSignature.name,
+          at:   existingSignature.at,
+          date: existingSignature.date,
+        }
       : null
   );
   const [submitting, setSubmitting] = useState(false);
@@ -318,6 +325,7 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
           estimate_id:   estimateId,
           signature_png: png,
           signed_by:     name,
+          signed_date:   signedDate,
           consent:       true,
         }),
       });
@@ -325,7 +333,11 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
       if (!r.ok || !data?.ok) {
         throw new Error(data?.error || `Request failed (HTTP ${r.status})`);
       }
-      setSigned({ png, name, at: data.signed_at || new Date().toISOString() });
+      setSigned({
+        png, name,
+        at:   data.signed_at   || new Date().toISOString(),
+        date: data.signed_date || signedDate,
+      });
     } catch (err) {
       setError(err?.message || 'Something went wrong. Please try again.');
     } finally {
@@ -333,14 +345,25 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
     }
   }
 
-  const canSign = hasInk && printedName.trim().length >= 2 && consent && !submitting;
+  const canSign = hasInk && printedName.trim().length >= 2 && !!signedDate && consent && !submitting;
 
   // ─── Already signed — show static receipt ───────────────────────────
   if (signed) {
-    const signedAtDate = signed.at instanceof Date ? signed.at : new Date(signed.at);
-    const signedAtLabel = isNaN(signedAtDate.getTime())
-      ? String(signed.at)
-      : signedAtDate.toLocaleString();
+    // Prefer the date the customer typed (signed_date). Fall back to the
+    // server timestamp (signed_at) for rows signed before migration 018.
+    const datePretty = (() => {
+      if (signed.date) {
+        // signed.date is a YYYY-MM-DD string — parse as local to avoid
+        // a one-day-off shift in EST timezone.
+        const [y, m, d] = signed.date.split('-').map(Number);
+        const local = new Date(y, m - 1, d);
+        if (!isNaN(local.getTime())) {
+          return local.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+      }
+      const at = signed.at instanceof Date ? signed.at : new Date(signed.at);
+      return isNaN(at.getTime()) ? String(signed.at) : at.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    })();
     return (
       <div style={{ marginTop: 32, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -348,7 +371,7 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
           <div>
             <div style={{ fontWeight: 800, color: '#15803d', fontSize: 16 }}>Estimate Approved</div>
             <div style={{ fontSize: 12, color: '#166534' }}>
-              Signed by <strong>{signed.name}</strong> on {signedAtLabel}
+              Signed by <strong>{signed.name}</strong> on <strong>{datePretty}</strong>
             </div>
           </div>
         </div>
@@ -407,16 +430,32 @@ function SignatureBlock({ estimateId, customerName, companyPhone, existingSignat
         </button>
       </div>
 
-      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', margin: '14px 0 6px' }}>
-        Print your full name
-      </label>
-      <input
-        type="text"
-        value={printedName}
-        onChange={(e) => setPrintedName(e.target.value)}
-        placeholder="e.g. Brian Salley"
-        style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
-      />
+      <div style={{ display: 'grid', gap: 12, marginTop: 14, gridTemplateColumns: 'minmax(0, 1fr) 160px' }}>
+        <div>
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
+            Print your full name
+          </label>
+          <input
+            type="text"
+            value={printedName}
+            onChange={(e) => setPrintedName(e.target.value)}
+            placeholder="e.g. Brian Salley"
+            style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+        <div>
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
+            Date
+          </label>
+          <input
+            type="date"
+            value={signedDate}
+            max={new Date().toISOString().slice(0, 10)}
+            onChange={(e) => setSignedDate(e.target.value)}
+            style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+      </div>
 
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, fontSize: 12, color: '#333', lineHeight: 1.55, cursor: 'pointer' }}>
         <input

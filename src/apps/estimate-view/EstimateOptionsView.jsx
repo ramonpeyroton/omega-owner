@@ -330,8 +330,21 @@ function OptionCard({ index, estimate, isSelected, isExpanded, isSigned, isLocke
 // ─── Signed receipt (someone already signed this group) ──────────────
 function SignedReceipt({ option, companyPhone }) {
   const label = option.option_label || 'the chosen option';
-  const signedAt = option.signed_at ? new Date(option.signed_at) : null;
-  const signedLabel = signedAt && !isNaN(signedAt.getTime()) ? signedAt.toLocaleString() : option.signed_at;
+  // Prefer the date the customer typed (signed_date); fall back to the
+  // server timestamp for rows signed before migration 018.
+  const signedLabel = (() => {
+    if (option.signed_date) {
+      const [y, m, d] = option.signed_date.split('-').map(Number);
+      const local = new Date(y, m - 1, d);
+      if (!isNaN(local.getTime())) {
+        return local.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      }
+    }
+    const at = option.signed_at ? new Date(option.signed_at) : null;
+    return at && !isNaN(at.getTime())
+      ? at.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+      : option.signed_at;
+  })();
   return (
     <div style={{ marginTop: 32, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -365,8 +378,9 @@ function SignatureBlock({ options, selectedId, onSelectId, customerName }) {
   const [hasInk, setHasInk] = useState(false);
 
   const [printedName, setPrintedName] = useState(customerName || '');
+  const [signedDate, setSignedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [consent, setConsent] = useState(false);
-  const [signed, setSigned] = useState(null);     // { png, name, at, label }
+  const [signed, setSigned] = useState(null);     // { png, name, at, date, label }
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
@@ -442,6 +456,7 @@ function SignatureBlock({ options, selectedId, onSelectId, customerName }) {
           estimate_id:   selectedOption.id,
           signature_png: png,
           signed_by:     name,
+          signed_date:   signedDate,
           consent:       true,
         }),
       });
@@ -449,7 +464,8 @@ function SignatureBlock({ options, selectedId, onSelectId, customerName }) {
       if (!r.ok || !data?.ok) throw new Error(data?.error || `Request failed (HTTP ${r.status})`);
       setSigned({
         png, name,
-        at: data.signed_at || new Date().toISOString(),
+        at:    data.signed_at   || new Date().toISOString(),
+        date:  data.signed_date || signedDate,
         label: selectedOption.option_label || 'the chosen option',
       });
     } catch (err) {
@@ -459,13 +475,22 @@ function SignatureBlock({ options, selectedId, onSelectId, customerName }) {
     }
   }
 
-  const canSign = hasInk && printedName.trim().length >= 2 && consent && !submitting && !!selectedOption;
+  const canSign = hasInk && printedName.trim().length >= 2 && !!signedDate && consent && !submitting && !!selectedOption;
 
   // After a successful signature — optimistic receipt (server state
   // will eventually show the exact same thing on reload).
   if (signed) {
-    const signedAt = new Date(signed.at);
-    const signedLabel = isNaN(signedAt.getTime()) ? signed.at : signedAt.toLocaleString();
+    const signedLabel = (() => {
+      if (signed.date) {
+        const [y, m, d] = signed.date.split('-').map(Number);
+        const local = new Date(y, m - 1, d);
+        if (!isNaN(local.getTime())) {
+          return local.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        }
+      }
+      const at = new Date(signed.at);
+      return isNaN(at.getTime()) ? signed.at : at.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    })();
     return (
       <div style={{ marginTop: 32, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 20 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
@@ -569,16 +594,32 @@ function SignatureBlock({ options, selectedId, onSelectId, customerName }) {
         </button>
       </div>
 
-      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', margin: '14px 0 6px' }}>
-        Print your full name
-      </label>
-      <input
-        type="text"
-        value={printedName}
-        onChange={(e) => setPrintedName(e.target.value)}
-        placeholder="e.g. Brian Salley"
-        style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
-      />
+      <div style={{ display: 'grid', gap: 12, marginTop: 14, gridTemplateColumns: 'minmax(0, 1fr) 160px' }}>
+        <div>
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
+            Print your full name
+          </label>
+          <input
+            type="text"
+            value={printedName}
+            onChange={(e) => setPrintedName(e.target.value)}
+            placeholder="e.g. Brian Salley"
+            style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+        <div>
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
+            Date
+          </label>
+          <input
+            type="date"
+            value={signedDate}
+            max={new Date().toISOString().slice(0, 10)}
+            onChange={(e) => setSignedDate(e.target.value)}
+            style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
+          />
+        </div>
+      </div>
 
       <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, fontSize: 12, color: '#333', lineHeight: 1.55, cursor: 'pointer' }}>
         <input

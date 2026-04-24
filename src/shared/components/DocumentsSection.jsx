@@ -63,9 +63,12 @@ export default function DocumentsSection({ job, user, onJobUpdated }) {
 
   async function loadEstimates() {
     try {
+      // Intentionally select('*') so pending migrations (e.g. signed_date
+      // from 018) don't break the whole folder — PostgREST would reject
+      // an explicit column list if any referenced column is missing.
       const { data } = await supabase
         .from('estimates')
-        .select('id, estimate_number, status, total_amount, sent_at, created_at, signed_at, signed_by, group_id, option_label, option_order, pdf_url')
+        .select('*')
         .eq('job_id', job.id)
         .order('created_at', { ascending: false });
       setEstimates(data || []);
@@ -230,7 +233,14 @@ export default function DocumentsSection({ job, user, onJobUpdated }) {
                     </div>
                     <p className="text-[11px] text-omega-stone mt-0.5">
                       {est.signed_at
-                        ? <>Signed by <strong>{est.signed_by || 'client'}</strong> · {new Date(est.signed_at).toLocaleDateString()}</>
+                        ? <>Signed by <strong>{est.signed_by || 'client'}</strong> · {(() => {
+                            if (est.signed_date) {
+                              const [y, m, d] = est.signed_date.split('-').map(Number);
+                              const local = new Date(y, m - 1, d);
+                              if (!isNaN(local.getTime())) return local.toLocaleDateString();
+                            }
+                            return new Date(est.signed_at).toLocaleDateString();
+                          })()}</>
                         : est.sent_at
                           ? <>Sent {new Date(est.sent_at).toLocaleDateString()}</>
                           : <>Created {new Date(est.created_at).toLocaleDateString()}</>

@@ -67,16 +67,37 @@ export default async function handler(req, res) {
   try { body = await readJson(req); }
   catch { return json(res, 400, { ok: false, error: 'Invalid JSON' }); }
 
-  const estimate_id   = (body?.estimate_id   || '').toString().trim();
-  const signature_png = (body?.signature_png || '').toString();
-  const signed_by     = (body?.signed_by     || '').toString().trim();
-  const consent       = body?.consent === true;
+  const estimate_id     = (body?.estimate_id   || '').toString().trim();
+  const signature_png   = (body?.signature_png || '').toString();
+  const signed_by       = (body?.signed_by     || '').toString().trim();
+  const signed_date_raw = (body?.signed_date   || '').toString().trim();
+  const consent         = body?.consent === true;
 
   if (!estimate_id)    return json(res, 400, { ok: false, error: 'Missing estimate_id' });
   if (!signature_png || !signature_png.startsWith('data:image/'))
                        return json(res, 400, { ok: false, error: 'Invalid signature_png (expected data: URL)' });
   if (signed_by.length < 2) return json(res, 400, { ok: false, error: 'signed_by must be at least 2 characters' });
   if (!consent)        return json(res, 400, { ok: false, error: 'ESIGN consent is required' });
+
+  // Validate client-entered date: must be YYYY-MM-DD, a real date, and
+  // not more than 24h in the future (accounts for timezone overlap).
+  // Falls back to today if the field is missing — the frontend always
+  // prefills it, so this is purely a defensive guard.
+  let signed_date = null;
+  if (signed_date_raw) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(signed_date_raw))
+      return json(res, 400, { ok: false, error: 'signed_date must be in YYYY-MM-DD format' });
+    const parsed = new Date(`${signed_date_raw}T00:00:00Z`);
+    if (isNaN(parsed.getTime()))
+      return json(res, 400, { ok: false, error: 'signed_date is not a valid date' });
+    const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
+    if (parsed.getTime() > tomorrow)
+      return json(res, 400, { ok: false, error: 'signed_date cannot be in the future' });
+    signed_date = signed_date_raw;
+  } else {
+    // Default: today in UTC (YYYY-MM-DD).
+    signed_date = new Date().toISOString().slice(0, 10);
+  }
 
   // Sanity cap — a canvas signature should not be larger than ~500 KB.
   // Anything bigger is probably someone trying to store random blobs.
@@ -115,17 +136,27 @@ export default async function handler(req, res) {
   const signed_ip = clientIp(req);
   const signed_user_agent = (req.headers['user-agent'] || '').toString().slice(0, 500) || null;
 
-  // Update estimates: signature + status flip.
-  const { error: updErr } = await supabase.from('estimates').update({
+  // Update estimates: signature + status flip. If the `signed_date`
+  // column hasn't been migrated yet (018), retry without it so the
+  // signature still lands — the server timestamp alone is enough to
+  // bootstrap until the migration is applied.
+  const fullPatch = {
     signature_png,
     signed_by,
     signed_at,
+    signed_date,
     signed_ip,
     signed_user_agent,
     status: 'approved',
     approved_at: signed_at,
     approved_by: signed_by,
-  }).eq('id', estimate_id);
+  };
+  let { error: updErr } = await supabase.from('estimates').update(fullPatch).eq('id', estimate_id);
+  if (updErr && /signed_date/i.test(updErr.message || '')) {
+    const { signed_date: _, ...fallback } = fullPatch;
+    const retry = await supabase.from('estimates').update(fallback).eq('id', estimate_id);
+    updErr = retry.error || null;
+  }
   if (updErr) return json(res, 500, { ok: false, error: updErr.message || 'Failed to save signature' });
 
   // If this is part of a multi-option group, auto-reject the siblings
@@ -176,5 +207,5 @@ export default async function handler(req, res) {
     ]);
   } catch { /* ignore */ }
 
-  return json(res, 200, { ok: true, signed_at, signed_by, rejected_siblings });
+  return json(res, 200, { ok: true, signed_at, signed_by, signed_date, rejected_siblings });
 }

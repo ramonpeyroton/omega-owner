@@ -148,9 +148,13 @@ export default function EstimateBuilder({ job, user, onJobUpdated }) {
       return data;
     } else {
       // First-save gets a human-readable estimate number from the sequence.
-      const { data: seqData } = await supabase.rpc('next_estimate_number').select();
-      // The RPC may not exist — fall back to null and the server will backfill.
-      const number = (Array.isArray(seqData) && seqData[0]) || null;
+      // The RPC returns a scalar integer — NOT an array — so read it
+      // directly. Previous version used Array.isArray()+[0] which always
+      // fell through to null, leaving estimates with no number.
+      const { data: seqData } = await supabase.rpc('next_estimate_number');
+      const number = typeof seqData === 'number'
+        ? seqData
+        : (Array.isArray(seqData) ? seqData[0] : null);   // accept row-shaped fallback too
       const { data, error } = await supabase
         .from('estimates')
         .insert([{ ...base, estimate_number: number, status: 'draft', option_order: 0 }])
@@ -186,8 +190,10 @@ export default function EstimateBuilder({ job, user, onJobUpdated }) {
       }
 
       // Duplicate the current row — same content, new uuid, same group_id.
-      const { data: seqData } = await supabase.rpc('next_estimate_number').select();
-      const number = (Array.isArray(seqData) && seqData[0]) || null;
+      const { data: seqData } = await supabase.rpc('next_estimate_number');
+      const number = typeof seqData === 'number'
+        ? seqData
+        : (Array.isArray(seqData) ? seqData[0] : null);
       const { data: created, error } = await supabase.from('estimates').insert([{
         job_id: job.id,
         header_description: current.header_description,

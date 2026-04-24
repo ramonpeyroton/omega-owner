@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { ArrowLeft, ArrowRight, Check, Sparkles, Pencil, X } from 'lucide-react';
+import * as Icons from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import {
   getSchemaForServices, isVisible, serviceLabel,
@@ -375,9 +376,31 @@ function QuestionField({ question, value, onChange, answers }) {
 }
 
 // ─── Main screen ────────────────────────────────────────────────────
+// The Questionnaire opens with a service-picker step so the seller
+// confirms (or adjusts) which services this project covers *before*
+// diving into project-detail questions. The receptionist may have
+// flagged one or two services during intake, but the seller is the one
+// actually in front of the client — they can add / remove here.
+// Once confirmed, the schema rebuilds and the existing flow runs.
 export default function Questionnaire(props) {
-  const { job } = props;
+  const { job, onJobUpdated } = props;
+  const [servicesConfirmed, setServicesConfirmed] = useState(false);
+
   const schema = useMemo(() => getSchemaForServices(job.service), [job.service]);
+
+  if (!servicesConfirmed) {
+    return (
+      <ServiceSelectionScreen
+        job={job}
+        onBack={() => props.onNavigate?.('pipeline')}
+        onConfirm={(updatedJob) => {
+          onJobUpdated?.(updatedJob);
+          setServicesConfirmed(true);
+        }}
+      />
+    );
+  }
+
   // Schemas tagged with section markers switch to a block-per-page UI
   // (every visible question in a section stacked on one scrollable page).
   // Schemas without markers keep the legacy one-question-per-page flow.
@@ -385,6 +408,125 @@ export default function Questionnaire(props) {
     return <SectionModeQuestionnaire {...props} schema={schema} />;
   }
   return <LegacyQuestionnaire {...props} schema={schema} />;
+}
+
+// ─── Service selection step ───────────────────────────────────────────
+// Shown when the seller first opens the questionnaire. Shows every
+// service offered, pre-checks the ones already on the job (what the
+// receptionist picked during intake), and lets the seller toggle.
+// "Start Questionnaire" saves the set and hands off to the flow.
+function ServiceSelectionScreen({ job, onBack, onConfirm }) {
+  const initial = splitServices(job.service);
+  const [picked, setPicked] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  function toggle(id) {
+    setPicked((prev) => (prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]));
+  }
+
+  async function start() {
+    if (picked.length === 0) { setError('Select at least one service before starting.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      const joined = picked.join(', ');
+      const originalJoined = initial.join(', ');
+      // Only hit the DB if the seller actually changed the set.
+      if (joined !== originalJoined) {
+        const { data, error: e } = await supabase
+          .from('jobs').update({ service: joined }).eq('id', job.id).select().single();
+        if (e) throw e;
+        onConfirm(data || { ...job, service: joined });
+      } else {
+        onConfirm(job);
+      }
+    } catch (e) {
+      setError(e?.message || 'Failed to save. Try again.');
+      setSaving(false);
+    }
+  }
+
+  const clientLabel = [job.client_name, job.city].filter(Boolean).join(' · ');
+
+  return (
+    <div className="min-h-screen bg-omega-cloud flex flex-col">
+      <header className="bg-omega-charcoal text-white px-5 py-4 sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto flex items-center gap-3">
+          <button onClick={onBack} className="p-2 rounded-lg hover:bg-white/10" aria-label="Back">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div className="min-w-0">
+            <p className="text-[10px] uppercase tracking-widest text-white/60 font-semibold">Questionnaire</p>
+            <h1 className="text-base sm:text-lg font-bold truncate">{clientLabel || 'New Project'}</h1>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-2xl w-full mx-auto px-4 sm:px-6 py-6">
+        <div className="mb-5">
+          <h2 className="text-lg sm:text-xl font-bold text-omega-charcoal">What services does this project cover?</h2>
+          <p className="text-sm text-omega-stone mt-1">
+            Pick every service the client wants a price on. You can change these later from inside the questionnaire if the scope shifts.
+          </p>
+        </div>
+
+        {error && (
+          <div className="mb-4 px-3 py-2.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {SERVICES.map((svc) => {
+            const selected = picked.includes(svc.id);
+            const Icon = Icons[svc.icon] || Icons.Wrench;
+            return (
+              <button
+                key={svc.id}
+                onClick={() => toggle(svc.id)}
+                type="button"
+                className={`relative flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all duration-150 ${
+                  selected
+                    ? 'border-omega-orange bg-omega-pale shadow-sm'
+                    : 'border-gray-200 bg-white hover:border-omega-orange/40'
+                }`}
+              >
+                {selected && (
+                  <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-omega-orange flex items-center justify-center">
+                    <Check className="w-3 h-3 text-white" />
+                  </span>
+                )}
+                <Icon className={`w-6 h-6 ${selected ? 'text-omega-orange' : 'text-omega-stone'}`} />
+                <span className={`text-xs font-semibold text-center leading-tight ${selected ? 'text-omega-charcoal' : 'text-omega-slate'}`}>
+                  {svc.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 text-xs text-omega-stone">
+          {picked.length} service{picked.length === 1 ? '' : 's'} selected.
+        </p>
+      </main>
+
+      <footer className="border-t border-gray-200 bg-white px-4 sm:px-6 py-4 sticky bottom-0">
+        <div className="max-w-2xl mx-auto flex gap-3">
+          <button onClick={onBack} className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-omega-slate font-semibold hover:bg-gray-50">
+            Cancel
+          </button>
+          <button
+            onClick={start}
+            disabled={saving || picked.length === 0}
+            className="flex-[2] inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-omega-orange hover:bg-omega-dark text-white font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? 'Saving…' : 'Start Questionnaire'} <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
 }
 
 function LegacyQuestionnaire({ job, schema, onNavigate, onJobUpdated, onComplete, onReviewReady }) {

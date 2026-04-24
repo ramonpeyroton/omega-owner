@@ -6,6 +6,7 @@ import Questionnaire from './screens/Questionnaire';
 import ReviewAnswers from './screens/ReviewAnswers';
 import Report from './screens/Report';
 import PreviousJobs from './screens/PreviousJobs';
+import Estimates from './screens/Estimates';
 import Notifications from './screens/Notifications';
 import PipelineKanban from '../../shared/components/PipelineKanban';
 import EstimateFlow from '../../shared/components/EstimateFlow';
@@ -154,6 +155,18 @@ function SalesRouter({ user, onLogout }) {
         </div>
         <CalendarScreen user={user} />
       </div>
+    );
+
+  if (screen === 'estimates')
+    return (
+      <Estimates
+        onBack={() => setScreen('home')}
+        onOpenEstimate={(job) => {
+          if (!job) return;
+          setCurrentJob(job);
+          setScreen('estimate-flow');
+        }}
+      />
     );
 
   if (screen === 'notifications')

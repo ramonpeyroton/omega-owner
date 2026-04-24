@@ -51,13 +51,52 @@ function escapeMultiline(s) {
   return escape(s).replace(/\n/g, '<br>');
 }
 
-function renderEstimateHTML({ estimate, job, company }) {
+function renderEstimateHTML({ estimate, job, company, clientLink }) {
   const sections = Array.isArray(estimate.sections) ? estimate.sections : [];
   const total = estimate.total_amount ?? sections.reduce((acc, s) =>
     acc + (s.items || []).reduce((a, it) => a + (Number(it.price) || 0), 0), 0);
 
   const addressBlock = [company?.address, `${company?.city || ''}${company?.city && company?.state ? ', ' : ''}${company?.state || ''} ${company?.zip || ''}`.trim(), company?.phone, company?.email]
     .filter(Boolean).map((l) => `<div>${escape(l)}</div>`).join('');
+
+  // Logo setup for email clients. Must be an absolute URL — relative
+  // paths don't work in Gmail/Outlook. Uses the admin-uploaded
+  // company.logo_url when available, falling back to the icon shipped
+  // in /public/logo.png next to the brand-name text (same layout as
+  // the EstimateView header).
+  const logoUrl = company?.logo_url || `${PUBLIC_APP_URL.replace(/\/$/, '')}/logo.png`;
+  const brandHTML = company?.logo_url
+    ? `<img src="${escape(logoUrl)}" alt="${escape(company?.company_name || 'Omega Development')}" height="72" style="display:block;border:0;outline:none;text-decoration:none;height:72px;width:auto;" />`
+    : `
+      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+        <tr>
+          <td style="vertical-align:middle;padding-right:12px;">
+            <img src="${escape(logoUrl)}" alt="Omega" width="64" height="64" style="display:block;border:0;outline:none;width:64px;height:64px;" />
+          </td>
+          <td style="vertical-align:middle;">
+            <div style="font-size:22px;font-weight:900;color:#2C2C2A;letter-spacing:-0.02em;line-height:1;">
+              OMEGA<span style="color:#E8732A;">DEVELOPMENT</span>
+            </div>
+            <div style="font-size:10px;font-weight:600;color:#6b6b6b;letter-spacing:.18em;margin-top:6px;">RENOVATIONS &amp; CONSTRUCTION</div>
+          </td>
+        </tr>
+      </table>`;
+
+  // Big orange CTA button — the real signature flow lives on the
+  // web page (canvas needs a browser). Email clients render JS-free
+  // HTML only, so we drop this button at the top AND bottom of the
+  // email so the customer can't miss it.
+  const signButtonHTML = clientLink ? `
+    <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 auto;">
+      <tr>
+        <td style="background:#E8732A;border-radius:8px;padding:0;">
+          <a href="${escape(clientLink)}" style="display:inline-block;padding:14px 32px;background:#E8732A;color:#ffffff;font-weight:900;font-size:15px;text-decoration:none;border-radius:8px;letter-spacing:.02em;">
+            Review &amp; Sign Estimate →
+          </a>
+        </td>
+      </tr>
+    </table>
+  ` : '';
 
   const customerBlock = [job.client_name, job.address, job.client_phone, job.client_email]
     .filter(Boolean).map((l) => `<div>${escape(l)}</div>`).join('');
@@ -101,12 +140,12 @@ function renderEstimateHTML({ estimate, job, company }) {
 <body style="margin:0;padding:32px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#2C2C2A;">
   <div style="max-width:780px;margin:0 auto;background:white;padding:32px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.05);">
 
-    <!-- Header -->
+    <!-- Header: logo + brand on the left, Estimate meta on the right -->
     <table style="width:100%;border-collapse:collapse;">
       <tr>
         <td style="vertical-align:top;">
-          <div style="font-size:22px;font-weight:900;color:#E8732A;letter-spacing:-0.02em;">${escape(company?.company_name || 'Omega Development')}</div>
-          <div style="font-size:12px;color:#555;line-height:1.6;margin-top:8px;">${addressBlock}</div>
+          ${brandHTML}
+          <div style="font-size:12px;color:#555;line-height:1.6;margin-top:12px;">${addressBlock}</div>
         </td>
         <td style="vertical-align:top;text-align:right;">
           <div style="font-size:32px;font-weight:900;color:#2C2C2A;">Estimate</div>
@@ -117,6 +156,15 @@ function renderEstimateHTML({ estimate, job, company }) {
         </td>
       </tr>
     </table>
+
+    ${signButtonHTML ? `
+    <!-- Top CTA: customer can jump straight to signing -->
+    <div style="margin-top:24px;padding:20px;background:#fff8f1;border:1px solid #E8732A40;border-radius:8px;text-align:center;">
+      <div style="font-size:14px;color:#2C2C2A;font-weight:700;margin-bottom:12px;">
+        Ready to move forward? Sign this estimate online in 30 seconds.
+      </div>
+      ${signButtonHTML}
+    </div>` : ''}
 
     <!-- Customer + Service Location -->
     <table style="width:100%;border-collapse:collapse;margin-top:24px;">
@@ -159,6 +207,18 @@ function renderEstimateHTML({ estimate, job, company }) {
       </tr>
     </table>
 
+    ${signButtonHTML ? `
+    <!-- Bottom CTA — second chance right before the footer -->
+    <div style="margin-top:32px;padding:24px;background:#2C2C2A;border-radius:8px;text-align:center;">
+      <div style="font-size:15px;color:white;font-weight:700;margin-bottom:6px;">
+        Ready to approve?
+      </div>
+      <div style="font-size:12px;color:#cccccc;margin-bottom:16px;line-height:1.5;">
+        Sign electronically on your phone or computer — no printing, scanning, or DocuSign back-and-forth. The final binding contract comes next.
+      </div>
+      ${signButtonHTML}
+    </div>` : ''}
+
     <div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#888;text-align:center;">
       Questions? Reply to this email or call ${escape(company?.phone || '')}.
     </div>
@@ -173,6 +233,23 @@ function renderEstimateHTML({ estimate, job, company }) {
 // side-by-side picker where the customer compares & signs.
 function renderMultiOptionHTML({ siblings, job, company, clientLink }) {
   const customerFirst = (job.client_name || 'there').split(' ')[0];
+  const logoUrl = company?.logo_url || `${PUBLIC_APP_URL.replace(/\/$/, '')}/logo.png`;
+  const brandHTML = company?.logo_url
+    ? `<img src="${escape(logoUrl)}" alt="${escape(company?.company_name || 'Omega Development')}" height="72" style="display:block;border:0;outline:none;text-decoration:none;height:72px;width:auto;" />`
+    : `
+      <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+        <tr>
+          <td style="vertical-align:middle;padding-right:12px;">
+            <img src="${escape(logoUrl)}" alt="Omega" width="64" height="64" style="display:block;border:0;outline:none;width:64px;height:64px;" />
+          </td>
+          <td style="vertical-align:middle;">
+            <div style="font-size:22px;font-weight:900;color:#2C2C2A;letter-spacing:-0.02em;line-height:1;">
+              OMEGA<span style="color:#E8732A;">DEVELOPMENT</span>
+            </div>
+            <div style="font-size:10px;font-weight:600;color:#6b6b6b;letter-spacing:.18em;margin-top:6px;">RENOVATIONS &amp; CONSTRUCTION</div>
+          </td>
+        </tr>
+      </table>`;
   const rows = (siblings || []).map((s, i) => {
     const label = s.option_label || `Option ${i + 1}`;
     const total = money(s.total_amount || 0);
@@ -193,10 +270,7 @@ function renderMultiOptionHTML({ siblings, job, company, clientLink }) {
 <body style="margin:0;padding:32px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#2C2C2A;">
   <div style="max-width:600px;margin:0 auto;background:white;padding:32px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.05);">
 
-    <div style="font-size:22px;font-weight:900;letter-spacing:-0.02em;">
-      <span style="color:#2C2C2A;">OMEGA</span><span style="color:#E8732A;">DEVELOPMENT</span>
-    </div>
-    <div style="font-size:10px;letter-spacing:.18em;color:#6b6b6b;font-weight:600;margin-top:4px;">RENOVATIONS &amp; CONSTRUCTION</div>
+    ${brandHTML}
 
     <h1 style="font-size:22px;margin:28px 0 8px;font-weight:900;">Hi ${escape(customerFirst)},</h1>
     <p style="font-size:14px;line-height:1.55;color:#444;margin:0 0 20px;">
@@ -271,7 +345,7 @@ export default async function handler(req, res) {
 
   const html = isMultiOption
     ? renderMultiOptionHTML({ siblings, job, company, clientLink })
-    : renderEstimateHTML({ estimate, job, company });
+    : renderEstimateHTML({ estimate, job, company, clientLink });
   const subject = isMultiOption
     ? `Your ${siblings.length} estimate options — ${company?.company_name || 'Omega Development'}`
     : `Estimate #${estimate.estimate_number || ''} — ${company?.company_name || 'Omega Development'}`.trim();

@@ -6,6 +6,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import Toast from '../components/Toast';
 import StatusBadge from '../components/StatusBadge';
 import COIBadge, { getCoiState } from '../components/COIBadge';
+import SubcontractorCardsView from '../components/SubcontractorCardsView';
 import { logAudit } from '../../../shared/lib/audit';
 import { formatPhoneInput, toE164 } from '../../../shared/lib/phone';
 
@@ -22,7 +23,7 @@ export default function SubcontractorManager({ user }) {
   const [agreements, setAgreements] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [toast, setToast] = useState(null);
-  const [tab, setTab] = useState('subs');
+  const [tab, setTab] = useState('cards');
 
   // modals
   const [showAddSub, setShowAddSub] = useState(false);
@@ -278,7 +279,8 @@ export default function SubcontractorManager({ user }) {
       <div className="px-6 md:px-8 mt-4">
         <div className="border-b border-gray-200 flex gap-1">
           {[
-            { id: 'subs', label: 'Subcontractors' },
+            { id: 'cards',      label: 'Cards' },
+            { id: 'subs',       label: 'Roster' },
             { id: 'agreements', label: 'Agreements' },
           ].map((t) => (
             <button
@@ -295,6 +297,18 @@ export default function SubcontractorManager({ user }) {
       </div>
 
       <div className="p-6 md:p-8 pt-4 space-y-4">
+
+        {tab === 'cards' && (
+          <SubcontractorCardsView
+            subs={subs}
+            agreements={agreements}
+            jobs={jobs}
+            onAddSub={() => setShowAddSub(true)}
+            onAddAgreement={() => setShowAddAgr(true)}
+            onEditSub={openEditSub}
+          />
+        )}
+
         {tab === 'subs' && (
           <>
             {expiringCount > 0 && (

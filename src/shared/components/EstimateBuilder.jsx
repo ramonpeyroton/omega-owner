@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
   FileText, Plus, Trash2, ChevronUp, ChevronDown, Save, Mail, Loader2,
-  AlertCircle, CheckCircle2, Download, Copy, Layers, X,
+  AlertCircle, CheckCircle2, Download, Copy, Layers, X, Shield, RotateCcw,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/audit';
+import { DEFAULT_ESTIMATE_DISCLAIMERS } from '../data/estimateDisclaimers';
 
 // Defaults reused whenever a brand-new estimate is opened. Mirrors the
 // structure of the ServiceFusion template the owner provided.
@@ -29,6 +30,9 @@ export default function EstimateBuilder({ job, user, onJobUpdated }) {
   const [sections, setSections] = useState([emptySection()]);
   const [customerMessage, setCustomerMessage] = useState(DEFAULT_PAYMENT);
   const [optionLabel, setOptionLabel] = useState('');
+  // Disclaimers shown to the customer right above the signature flow.
+  // Defaults to the global template; the seller can edit them per-estimate.
+  const [disclaimers, setDisclaimers] = useState(DEFAULT_ESTIMATE_DISCLAIMERS);
 
   // Multi-option state. `options` is the whole group, ordered by
   // option_order. When there's 0 or 1 rows, the switcher hides.
@@ -82,6 +86,10 @@ export default function EstimateBuilder({ job, user, onJobUpdated }) {
     setSections(Array.isArray(row?.sections) && row.sections.length ? row.sections : [emptySection()]);
     setCustomerMessage(row?.customer_message || DEFAULT_PAYMENT);
     setOptionLabel(row?.option_label || '');
+    // Use the persisted disclaimers if the seller already customized
+    // them on this estimate; otherwise fall back to the default. A row
+    // saved before migration 019 will have `disclaimers === undefined`.
+    setDisclaimers(row?.disclaimers || DEFAULT_ESTIMATE_DISCLAIMERS);
   }
 
   // ─── Section / item helpers ───────────────────────────────────────
@@ -134,6 +142,11 @@ export default function EstimateBuilder({ job, user, onJobUpdated }) {
       customer_message: customerMessage,
       total_amount: total,
       option_label: optionLabel || null,
+      // Persist whatever disclaimer text the seller has on screen, so
+      // the customer always sees the latest version when they open the
+      // signing page. Migration 019 adds the column; row-level fallback
+      // happens in the API if it's pending.
+      disclaimers: disclaimers || null,
       ...extra,
     };
     // Preserve an existing row's status on save (was dropping 'sent'
@@ -457,6 +470,44 @@ export default function EstimateBuilder({ job, user, onJobUpdated }) {
         >
           <Plus className="w-4 h-4" /> Add Section
         </button>
+      </div>
+
+      {/* Disclaimers — shown on the customer's signing page right above
+          the signature canvas. Markdown-ish formatting (**bold**, ---).
+          Pre-populated from the global default; the seller can edit
+          anything for a one-off estimate (e.g. extra restriction for a
+          specific project) without affecting other estimates. */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
+        <div className="flex items-start justify-between gap-2 flex-wrap mb-1">
+          <div>
+            <h2 className="text-base font-bold text-omega-charcoal inline-flex items-center gap-2">
+              <Shield className="w-4 h-4 text-omega-orange" /> Project Disclaimers
+            </h2>
+            <p className="text-xs text-omega-stone mt-0.5">
+              Shown to the client right before the signature canvas. They must check "I have read and acknowledge" before they can sign.
+            </p>
+          </div>
+          {disclaimers !== DEFAULT_ESTIMATE_DISCLAIMERS && (
+            <button
+              type="button"
+              onClick={() => setDisclaimers(DEFAULT_ESTIMATE_DISCLAIMERS)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 text-xs font-bold text-omega-stone hover:border-omega-orange hover:text-omega-orange flex-shrink-0"
+              title="Restore the default disclaimer text"
+            >
+              <RotateCcw className="w-3 h-3" /> Reset to default
+            </button>
+          )}
+        </div>
+        <textarea
+          rows={10}
+          value={disclaimers}
+          onChange={(e) => setDisclaimers(e.target.value)}
+          placeholder={DEFAULT_ESTIMATE_DISCLAIMERS}
+          className="mt-2 w-full px-3 py-2 rounded-lg border border-gray-200 text-xs focus:border-omega-orange focus:outline-none font-mono leading-relaxed"
+        />
+        <p className="mt-1 text-[10px] text-omega-stone">
+          Tip: <code className="bg-gray-100 px-1 rounded">**bold**</code>, blank lines for paragraphs, <code className="bg-gray-100 px-1 rounded">---</code> for a divider.
+        </p>
       </div>
 
       {/* Footer */}

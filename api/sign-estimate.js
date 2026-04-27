@@ -69,15 +69,28 @@ export default async function handler(req, res) {
 
   const estimate_id     = (body?.estimate_id   || '').toString().trim();
   const signature_png   = (body?.signature_png || '').toString();
+  const initials_png    = (body?.initials_png  || '').toString();
   const signed_by       = (body?.signed_by     || '').toString().trim();
   const signed_date_raw = (body?.signed_date   || '').toString().trim();
+  const disclaimers     = (body?.disclaimers   || '').toString();
   const consent         = body?.consent === true;
+  // Disclaimers acknowledgement is required IF the front-end shipped
+  // disclaimer text. Older clients / direct-API callers without
+  // disclaimer support skip this gate (back-compat).
+  const disclaimers_acknowledged = body?.disclaimers_acknowledged === true;
 
   if (!estimate_id)    return json(res, 400, { ok: false, error: 'Missing estimate_id' });
   if (!signature_png || !signature_png.startsWith('data:image/'))
                        return json(res, 400, { ok: false, error: 'Invalid signature_png (expected data: URL)' });
   if (signed_by.length < 2) return json(res, 400, { ok: false, error: 'signed_by must be at least 2 characters' });
   if (!consent)        return json(res, 400, { ok: false, error: 'ESIGN consent is required' });
+
+  // Disclaimer acknowledgement gate — only enforced when the client
+  // actually provided disclaimer text, so legacy callers that don't
+  // know about disclaimers still work.
+  if (disclaimers && disclaimers.trim() && !disclaimers_acknowledged) {
+    return json(res, 400, { ok: false, error: 'You must acknowledge the project disclaimers before signing.' });
+  }
 
   // Validate client-entered date: must be YYYY-MM-DD, a real date, and
   // not more than 24h in the future (accounts for timezone overlap).
@@ -99,10 +112,13 @@ export default async function handler(req, res) {
     signed_date = new Date().toISOString().slice(0, 10);
   }
 
-  // Sanity cap — a canvas signature should not be larger than ~500 KB.
-  // Anything bigger is probably someone trying to store random blobs.
+  // Sanity caps — the full signature should not be larger than ~500 KB
+  // and the initials around 200 KB. Anything bigger is probably someone
+  // trying to store random blobs.
   if (signature_png.length > 500_000)
     return json(res, 413, { ok: false, error: 'Signature image too large' });
+  if (initials_png && initials_png.length > 200_000)
+    return json(res, 413, { ok: false, error: 'Initials image too large' });
 
   // Load the estimate. 404 if missing, 409 if already signed.
   const { data: estimate, error: eErr } = await supabase
@@ -136,26 +152,36 @@ export default async function handler(req, res) {
   const signed_ip = clientIp(req);
   const signed_user_agent = (req.headers['user-agent'] || '').toString().slice(0, 500) || null;
 
-  // Update estimates: signature + status flip. If the `signed_date`
-  // column hasn't been migrated yet (018), retry without it so the
-  // signature still lands — the server timestamp alone is enough to
-  // bootstrap until the migration is applied.
+  // Update estimates: signature + status flip. If a column from a
+  // pending migration is missing (signed_date from 018, or
+  // initials_png / disclaimers from 019) the API drops only the
+  // missing fields and retries — the signature still lands, and the
+  // legal record we *can* save (signature_png + signed_at) is enough
+  // to bootstrap until the migrations are applied.
   const fullPatch = {
     signature_png,
+    initials_png:  initials_png || null,
     signed_by,
     signed_at,
     signed_date,
     signed_ip,
     signed_user_agent,
+    disclaimers:   disclaimers || null,
     status: 'approved',
     approved_at: signed_at,
     approved_by: signed_by,
   };
   let { error: updErr } = await supabase.from('estimates').update(fullPatch).eq('id', estimate_id);
-  if (updErr && /signed_date/i.test(updErr.message || '')) {
-    const { signed_date: _, ...fallback } = fullPatch;
+  // Drop fields one by one if Supabase rejects them with PGRST204
+  // (missing column). Order matters — drop the newest schema additions
+  // first so we don't lose data we *could* have saved.
+  for (const key of ['initials_png', 'disclaimers', 'signed_date']) {
+    if (!updErr) break;
+    if (!new RegExp(key, 'i').test(updErr.message || '')) continue;
+    const { [key]: _drop, ...fallback } = fullPatch;
     const retry = await supabase.from('estimates').update(fallback).eq('id', estimate_id);
     updErr = retry.error || null;
+    fullPatch[key] = undefined; // keep the loop honest if multiple cols missing
   }
   if (updErr) return json(res, 500, { ok: false, error: updErr.message || 'Failed to save signature' });
 

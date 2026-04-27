@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../shared/lib/supabase';
+import { DEFAULT_ESTIMATE_DISCLAIMERS } from '../../shared/data/estimateDisclaimers';
+import SignatureFlow from '../../shared/components/SignatureFlow';
 
 // Public, auth-less page the customer lands on when they receive a
 // multi-option estimate email. Shows N proposals side-by-side, lets
@@ -146,11 +148,12 @@ export default function EstimateOptionsView() {
           {signedOption ? (
             <SignedReceipt option={signedOption} companyPhone={company?.phone} />
           ) : (
-            <SignatureBlock
+            <MultiOptionSignSection
               options={options}
               selectedId={selectedId}
               onSelectId={setSelectedId}
               customerName={job?.client_name}
+              companyPhone={company?.phone}
             />
           )}
 
@@ -370,297 +373,84 @@ function SignedReceipt({ option, companyPhone }) {
   );
 }
 
-// ─── Signature block (unified picker + canvas + consent) ─────────────
-function SignatureBlock({ options, selectedId, onSelectId, customerName }) {
-  const canvasRef = useRef(null);
-  const drawingRef = useRef(false);
-  const lastRef = useRef({ x: 0, y: 0 });
-  const [hasInk, setHasInk] = useState(false);
 
-  const [printedName, setPrintedName] = useState(customerName || '');
-  const [signedDate, setSignedDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [consent, setConsent] = useState(false);
-  const [signed, setSigned] = useState(null);     // { png, name, at, date, label }
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState(null);
-
-  const selectedOption = useMemo(() =>
-    options.find((o) => o.id === selectedId) || options[0],
-  [options, selectedId]);
-
-  // Canvas sizing (same HiDPI logic as EstimateView).
-  useEffect(() => {
-    if (signed) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const fit = () => {
-      const ratio = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      canvas.width  = rect.width * ratio;
-      canvas.height = rect.height * ratio;
-      const ctx = canvas.getContext('2d');
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.scale(ratio, ratio);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineWidth = 2.2;
-      ctx.strokeStyle = '#111';
-    };
-    fit();
-    window.addEventListener('resize', fit);
-    return () => window.removeEventListener('resize', fit);
-  }, [signed]);
-
-  function pointerPos(e) {
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const p = 'touches' in e ? e.touches[0] : e;
-    return { x: p.clientX - rect.left, y: p.clientY - rect.top };
-  }
-
-  function onDown(e) { e.preventDefault(); drawingRef.current = true; lastRef.current = pointerPos(e); }
-  function onMove(e) {
-    if (!drawingRef.current) return;
-    e.preventDefault();
-    const { x, y } = pointerPos(e);
-    const ctx = canvasRef.current.getContext('2d');
-    ctx.beginPath();
-    ctx.moveTo(lastRef.current.x, lastRef.current.y);
-    ctx.lineTo(x, y);
-    ctx.stroke();
-    lastRef.current = { x, y };
-    if (!hasInk) setHasInk(true);
-  }
-  function onUp() { drawingRef.current = false; }
-
-  function clearCanvas() {
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    setHasInk(false);
-  }
-
-  async function sign() {
-    if (submitting || !selectedOption) return;
-    setError(null);
-    setSubmitting(true);
-    try {
-      const canvas = canvasRef.current;
-      const png = canvas.toDataURL('image/png');
-      const name = printedName.trim();
-
-      const r = await fetch('/api/sign-estimate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          estimate_id:   selectedOption.id,
-          signature_png: png,
-          signed_by:     name,
-          signed_date:   signedDate,
-          consent:       true,
-        }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data?.ok) throw new Error(data?.error || `Request failed (HTTP ${r.status})`);
-      setSigned({
-        png, name,
-        at:    data.signed_at   || new Date().toISOString(),
-        date:  data.signed_date || signedDate,
-        label: selectedOption.option_label || 'the chosen option',
-      });
-    } catch (err) {
-      setError(err?.message || 'Something went wrong. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const canSign = hasInk && printedName.trim().length >= 2 && !!signedDate && consent && !submitting && !!selectedOption;
-
-  // After a successful signature — optimistic receipt (server state
-  // will eventually show the exact same thing on reload).
-  if (signed) {
-    const signedLabel = (() => {
-      if (signed.date) {
-        const [y, m, d] = signed.date.split('-').map(Number);
-        const local = new Date(y, m - 1, d);
-        if (!isNaN(local.getTime())) {
-          return local.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-        }
-      }
-      const at = new Date(signed.at);
-      return isNaN(at.getTime()) ? signed.at : at.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-    })();
-    return (
-      <div style={{ marginTop: 32, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#16a34a', color: 'white', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900 }}>✓</div>
-          <div>
-            <div style={{ fontWeight: 800, color: '#15803d', fontSize: 16 }}>Proposal Approved — {signed.label}</div>
-            <div style={{ fontSize: 12, color: '#166534' }}>
-              Signed by <strong>{signed.name}</strong> on {signedLabel}
-            </div>
-          </div>
-        </div>
-        <div style={{ background: 'white', border: '1px solid #bbf7d0', borderRadius: 6, padding: 10, marginTop: 8 }}>
-          <div style={{ fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: '#15803d', fontWeight: 700, marginBottom: 6 }}>Signature</div>
-          <img src={signed.png} alt="Signature" style={{ maxWidth: 320, display: 'block' }} />
-        </div>
-        <p style={{ fontSize: 11, color: '#166534', marginTop: 10 }}>
-          The other alternatives have been withdrawn. Omega will send the final contract shortly with a payment schedule and deposit request.
-        </p>
-      </div>
-    );
-  }
-
+// ─── Multi-option signing section ──────────────────────────────────
+// Wraps the radio picker (which alternative is the customer signing?)
+// around the shared SignatureFlow component. Reloads the page on a
+// successful signature so the locked SignedReceipt becomes the new
+// rendering — saves us a redundant client-side state machine.
+function MultiOptionSignSection({ options, selectedId, onSelectId, customerName, companyPhone }) {
+  const selectedOption = useMemo(
+    () => options.find((o) => o.id === selectedId) || options[0],
+    [options, selectedId]
+  );
   const selectedLabel = selectedOption?.option_label || 'Option';
   const selectedTotal = selectedOption ? total(selectedOption) : 0;
 
   return (
-    <div className="no-print" style={{ marginTop: 32, background: '#fafafa', border: '1px solid #eee', borderRadius: 8, padding: 20 }}>
-      <div style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: '#6b6b6b', fontWeight: 700 }}>
-        Choose &amp; Sign
-      </div>
-      <h3 style={{ fontSize: 18, fontWeight: 900, margin: '6px 0 4px', color: '#2C2C2A' }}>
-        Which option are you going with?
-      </h3>
-      <p style={{ fontSize: 13, color: '#555', lineHeight: 1.55, marginBottom: 16 }}>
-        Pick one below, then sign to approve. Once you sign, the other alternatives
-        are automatically withdrawn.
-      </p>
+    <>
+      {/* Picker — radio list synced with the cards above */}
+      <div className="no-print" style={{ marginTop: 32, background: '#fafafa', border: '1px solid #eee', borderRadius: 8, padding: 20 }}>
+        <div style={{ fontSize: 11, letterSpacing: '.08em', textTransform: 'uppercase', color: '#6b6b6b', fontWeight: 700 }}>
+          Choose &amp; Sign
+        </div>
+        <h3 style={{ fontSize: 18, fontWeight: 900, margin: '6px 0 4px', color: '#2C2C2A' }}>
+          Which option are you going with?
+        </h3>
+        <p style={{ fontSize: 13, color: '#555', lineHeight: 1.55, marginBottom: 16 }}>
+          Pick one below, then complete the three steps to approve. Once you sign,
+          the other alternatives are automatically withdrawn.
+        </p>
 
-      {/* Radio list — synced with card selection above */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-        {options.map((est, i) => {
-          const isSelected = selectedOption?.id === est.id;
-          return (
-            <label
-              key={est.id}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 12px',
-                background: isSelected ? '#fff8f1' : 'white',
-                border: `2px solid ${isSelected ? ORANGE : '#e5e5e5'}`,
-                borderRadius: 8,
-                cursor: 'pointer',
-                transition: 'border-color 100ms',
-              }}
-            >
-              <input
-                type="radio"
-                name="chosen-option"
-                checked={isSelected}
-                onChange={() => onSelectId?.(est.id)}
-                style={{ accentColor: ORANGE }}
-              />
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#2C2C2A', flex: 1 }}>
-                Option {i + 1} — {est.option_label || '—'}
-              </span>
-              <span style={{ fontSize: 14, fontWeight: 900, color: '#2C2C2A', fontVariantNumeric: 'tabular-nums' }}>
-                {money(total(est))}
-              </span>
-            </label>
-          );
-        })}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {options.map((est, i) => {
+            const isSelected = selectedOption?.id === est.id;
+            return (
+              <label
+                key={est.id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px',
+                  background: isSelected ? '#fff8f1' : 'white',
+                  border: `2px solid ${isSelected ? ORANGE : '#e5e5e5'}`,
+                  borderRadius: 8, cursor: 'pointer',
+                  transition: 'border-color 100ms',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="chosen-option"
+                  checked={isSelected}
+                  onChange={() => onSelectId?.(est.id)}
+                  style={{ accentColor: ORANGE }}
+                />
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#2C2C2A', flex: 1 }}>
+                  Option {i + 1} — {est.option_label || '—'}
+                </span>
+                <span style={{ fontSize: 14, fontWeight: 900, color: '#2C2C2A', fontVariantNumeric: 'tabular-nums' }}>
+                  {money(total(est))}
+                </span>
+              </label>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Canvas */}
-      <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
-        Draw your signature
-      </label>
-      <div style={{ position: 'relative', background: 'white', border: '1px solid #ccc', borderRadius: 6, touchAction: 'none' }}>
-        <canvas
-          ref={canvasRef}
-          onMouseDown={onDown}
-          onMouseMove={onMove}
-          onMouseUp={onUp}
-          onMouseLeave={onUp}
-          onTouchStart={onDown}
-          onTouchMove={onMove}
-          onTouchEnd={onUp}
-          style={{ display: 'block', width: '100%', height: 160, cursor: 'crosshair', borderRadius: 6 }}
+      {/* Three-step approval (initials + disclaimers + signature) */}
+      {selectedOption && (
+        <SignatureFlow
+          estimateId={selectedOption.id}
+          customerName={customerName}
+          companyPhone={companyPhone}
+          disclaimers={selectedOption.disclaimers || DEFAULT_ESTIMATE_DISCLAIMERS}
+          signButtonLabel={`Sign & Approve ${selectedLabel} (${money(selectedTotal)})`}
+          onSigned={() => {
+            // Reload so the page swaps into the locked SignedReceipt
+            // state with up-to-date data from Supabase.
+            window.location.reload();
+          }}
         />
-        {!hasInk && (
-          <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', color: '#c8c8c8', fontSize: 13, pointerEvents: 'none', fontStyle: 'italic' }}>
-            Draw with your finger or mouse
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={clearCanvas}
-          style={{ position: 'absolute', top: 8, right: 8, background: 'white', border: '1px solid #ddd', fontSize: 11, fontWeight: 700, color: '#6b6b6b', borderRadius: 4, padding: '4px 10px', cursor: 'pointer' }}
-        >
-          Clear
-        </button>
-      </div>
-
-      <div style={{ display: 'grid', gap: 12, marginTop: 14, gridTemplateColumns: 'minmax(0, 1fr) 160px' }}>
-        <div>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
-            Print your full name
-          </label>
-          <input
-            type="text"
-            value={printedName}
-            onChange={(e) => setPrintedName(e.target.value)}
-            placeholder="e.g. Brian Salley"
-            style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
-          />
-        </div>
-        <div>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: '#6b6b6b', marginBottom: 6 }}>
-            Date
-          </label>
-          <input
-            type="date"
-            value={signedDate}
-            max={new Date().toISOString().slice(0, 10)}
-            onChange={(e) => setSignedDate(e.target.value)}
-            style={{ width: '100%', padding: '10px 12px', border: '1px solid #ccc', borderRadius: 6, fontSize: 14, outline: 'none', boxSizing: 'border-box' }}
-          />
-        </div>
-      </div>
-
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, fontSize: 12, color: '#333', lineHeight: 1.55, cursor: 'pointer' }}>
-        <input
-          type="checkbox"
-          checked={consent}
-          onChange={(e) => setConsent(e.target.checked)}
-          style={{ marginTop: 3 }}
-        />
-        <span>
-          I agree to sign this proposal electronically and confirm my electronic signature
-          is legally binding under the U.S. ESIGN Act. I authorize Omega Development LLC
-          to proceed with scheduling the contract for the option I selected.
-        </span>
-      </label>
-
-      {error && (
-        <div style={{ marginTop: 14, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', borderRadius: 6, padding: '10px 12px', fontSize: 12, lineHeight: 1.5 }}>
-          {error}
-        </div>
       )}
-
-      <button
-        type="button"
-        onClick={sign}
-        disabled={!canSign}
-        style={{
-          marginTop: 16, width: '100%', padding: '14px 20px',
-          background: canSign ? ORANGE : '#e5e5e5',
-          color: canSign ? 'white' : '#aaa',
-          border: 'none', borderRadius: 8, fontSize: 15, fontWeight: 900, letterSpacing: '.02em',
-          cursor: canSign ? 'pointer' : 'not-allowed',
-        }}
-      >
-        {submitting ? 'Signing…' : `Sign & Approve ${selectedLabel} (${money(selectedTotal)})`}
-      </button>
-
-      <p style={{ fontSize: 10, color: '#888', marginTop: 10, textAlign: 'center' }}>
-        By signing, you acknowledge the proposal above. The final binding contract
-        will be sent separately via DocuSign. Your IP address and timestamp are recorded
-        as part of the signature audit trail.
-      </p>
-    </div>
+    </>
   );
 }

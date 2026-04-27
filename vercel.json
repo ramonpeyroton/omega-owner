@@ -1,11 +1,18 @@
 {
   "rewrites": [
-    { "source": "/admin-x9k2/:path*",     "destination": "/" },
-    { "source": "/admin-x9k2",            "destination": "/" },
-    { "source": "/estimate-view/:path*",  "destination": "/" },
-    { "source": "/privacy",               "destination": "/" },
-    { "source": "/privacy-policy",        "destination": "/" },
-    { "source": "/terms",                 "destination": "/" },
-    { "source": "/terms-and-conditions",  "destination": "/" }
+    { "source": "/admin-x9k2/:path*",        "destination": "/" },
+    { "source": "/admin-x9k2",               "destination": "/" },
+    { "source": "/estimate-view/:path*",     "destination": "/" },
+    { "source": "/estimate-options/:path*",  "destination": "/" },
+    { "source": "/privacy",                  "destination": "/" },
+    { "source": "/privacy-policy",           "destination": "/" },
+    { "source": "/terms",                    "destination": "/" },
+    { "source": "/terms-and-conditions",     "destination": "/" }
+  ],
+  "crons": [
+    {
+      "path": "/api/daily-owner-update",
+      "schedule": "0 13 * * *"
+    }
   ]
 }

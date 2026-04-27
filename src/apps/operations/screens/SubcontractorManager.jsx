@@ -31,6 +31,9 @@ export default function SubcontractorManager({ user }) {
   const [subForm, setSubForm] = useState({
     name: '', trade: '', phone: '', email: '', tax_id: '',
     insurance_company: '', insurance_policy_number: '', coi_expiry_date: '',
+    // Sub-facing pages (offer Accept/Reject) translate based on this.
+    // The internal app stays in English no matter what.
+    preferred_language: 'en',
   });
   const [coiFile, setCoiFile] = useState(null);
   const [editSub, setEditSub] = useState(null); // sub row being edited
@@ -89,6 +92,7 @@ export default function SubcontractorManager({ user }) {
       phone: sub.phone || '',
       email: sub.email || '',
       tax_id: sub.tax_id || '',
+      preferred_language: sub.preferred_language || 'en',
       insurance_company: sub.insurance_company || '',
       insurance_policy_number: sub.insurance_policy_number || '',
       coi_expiry_date: sub.coi_expiry_date || '',
@@ -196,7 +200,7 @@ export default function SubcontractorManager({ user }) {
         setSubs((prev) => [data, ...prev]);
       }
       setShowAddSub(false);
-      setSubForm({ name: '', trade: '', phone: '', email: '', tax_id: '', insurance_company: '', insurance_policy_number: '', coi_expiry_date: '' });
+      setSubForm({ name: '', trade: '', phone: '', email: '', tax_id: '', insurance_company: '', insurance_policy_number: '', coi_expiry_date: '', preferred_language: 'en' });
       setCoiFile(null);
       setToast({ type: 'success', message: 'Subcontractor added' });
     } catch (err) {
@@ -458,6 +462,21 @@ export default function SubcontractorManager({ user }) {
                 </div>
               ))}
               <div className="sm:col-span-2">
+                <label className="text-xs font-semibold text-omega-stone uppercase">Preferred Language</label>
+                <select
+                  value={subForm.preferred_language || 'en'}
+                  onChange={(e) => setSubForm({ ...subForm, preferred_language: e.target.value })}
+                  className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white"
+                >
+                  <option value="en">English</option>
+                  <option value="pt">Português (PT-BR)</option>
+                  <option value="es">Español</option>
+                </select>
+                <p className="text-[10px] text-omega-stone mt-1">
+                  Sub-facing pages (Accept/Reject) will translate to this language. The internal app stays English.
+                </p>
+              </div>
+              <div className="sm:col-span-2">
                 <label className="text-xs font-semibold text-omega-stone uppercase">Upload COI (PDF)</label>
                 <input type="file" accept="application/pdf" onChange={(e) => setCoiFile(e.target.files?.[0] || null)} className="mt-1 w-full text-sm" />
               </div>
@@ -580,6 +599,18 @@ export default function SubcontractorManager({ user }) {
                   )}
                 </div>
               ))}
+              <div className="sm:col-span-2">
+                <label className="text-xs font-semibold text-omega-stone uppercase">Preferred Language</label>
+                <select
+                  value={editForm.preferred_language || 'en'}
+                  onChange={(e) => setEditForm({ ...editForm, preferred_language: e.target.value })}
+                  className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm bg-white"
+                >
+                  <option value="en">English</option>
+                  <option value="pt">Português (PT-BR)</option>
+                  <option value="es">Español</option>
+                </select>
+              </div>
               <div className="sm:col-span-2">
                 <label className="text-xs font-semibold text-omega-stone uppercase">Upload new COI (optional)</label>
                 <input type="file" accept="application/pdf,image/*" onChange={(e) => setEditCoiFile(e.target.files?.[0] || null)} className="mt-1 w-full text-sm" />

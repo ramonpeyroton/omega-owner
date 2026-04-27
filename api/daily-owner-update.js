@@ -102,10 +102,58 @@ export default async function handler(req, res) {
     return json(res, 500, { ok: false, error: insErr.message });
   }
 
+  // ─── Pending sub offer reminders ─────────────────────────────────
+  // Any subcontractor offer that's still status='sent' more than 24h
+  // after sent_at gets the owner a fresh reminder (with a 23h-window
+  // dedup). We do NOT auto-expire the offer — Ramon's call: the offer
+  // only goes away when the sub responds or when Inácio reassigns.
+  let pendingOffers = [];
+  let offerReminders = 0;
+  try {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: stale } = await supabase
+      .from('subcontractor_offers')
+      .select('id, job_id, subcontractor_id, sent_at, last_reminder_at, scope_of_work, subcontractors(name)')
+      .eq('status', 'sent')
+      .lt('sent_at', yesterday);
+    pendingOffers = stale || [];
+
+    // Dedup against last_reminder_at (don't ping every day).
+    const reminderCutoff = new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString();
+    const toRemind = pendingOffers.filter(
+      (o) => !o.last_reminder_at || o.last_reminder_at < reminderCutoff
+    );
+
+    if (toRemind.length > 0) {
+      const offerRows = toRemind.map((o) => ({
+        recipient_role: 'owner',
+        type:           'sub_offer_pending_24h',
+        job_id:         o.job_id,
+        title:          `${o.subcontractors?.name || 'A subcontractor'} hasn't responded yet`,
+        message:        `Offer was sent ${new Date(o.sent_at).toLocaleDateString()}. Scope: ${(o.scope_of_work || '').slice(0, 80)}${(o.scope_of_work || '').length > 80 ? '…' : ''}. Consider following up by phone or assigning a different sub.`,
+        read:           false,
+        seen:           false,
+      }));
+      const { error: offerErr } = await supabase.from('notifications').insert(offerRows);
+      if (!offerErr) {
+        offerReminders = offerRows.length;
+        // Stamp last_reminder_at on each so we don't ping again for ~23h.
+        const now = new Date().toISOString();
+        for (const o of toRemind) {
+          await supabase.from('subcontractor_offers')
+            .update({ last_reminder_at: now })
+            .eq('id', o.id);
+        }
+      }
+    }
+  } catch { /* non-fatal — owner already got the job-update notif */ }
+
   return json(res, 200, {
     ok: true,
     jobs_active: jobs.length,
     notifications_created: rows.length,
     skipped: skipSet.size,
+    pending_offers: pendingOffers.length,
+    offer_reminders_created: offerReminders,
   });
 }

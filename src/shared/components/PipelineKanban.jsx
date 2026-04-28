@@ -88,9 +88,26 @@ function JobCard({ job, coiWarning, onOpen, onDelete, canDelete, isDragging }) {
 }
 
 // ─── Draggable wrapper ─────────────────────────────────────────────
+// `touchAction: 'none'` is THE fix for iPad/tablet drag — without it,
+// iOS Safari intercepts the touchmove event for native vertical scroll
+// before @dnd-kit's TouchSensor sees it, so the card just sits there
+// while the page scrolls. Setting touch-action: none on the draggable
+// surface tells the browser "I'm handling all gestures here." Combined
+// with the TouchSensor's 150ms activation delay, a quick tap still
+// scrolls (delay isn't met) but a held-then-dragged gesture moves the
+// card.
+//
+// `cursor: grab` / `grabbing` is just visual feedback so it's obvious
+// the card is interactive on desktop too.
 function DraggableJobCard({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id });
-  const style = transform ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` } : undefined;
+  const style = {
+    touchAction: 'none',
+    cursor: isDragging ? 'grabbing' : 'grab',
+    ...(transform
+      ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, zIndex: 50 }
+      : {}),
+  };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       {typeof children === 'function' ? children({ isDragging }) : children}

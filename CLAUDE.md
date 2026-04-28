@@ -151,10 +151,7 @@ Admin **nunca** está em `users` — o login admin é exclusivo da rota oculta.
 ## Caminhos importantes
 
 - **Pasta local (Windows):** `C:\Users\ramon\Documents\omega-unified`
-- **GitHub:** https://github.com/ramonpeyroton/omega-owner
-  *(o repo no GitHub se chama `omega-owner`; o nome `omega-unified` é o
-  do package e da pasta local — se renomear o repo no futuro, atualizar
-  aqui.)*
+- **GitHub:** https://github.com/ramonpeyroton/omega-unified
 - **Branch principal:** `main` — sempre trabalhar direto, **sem
   worktrees nem feature branches**.
 - **URL produção:** https://omega-unified.vercel.app

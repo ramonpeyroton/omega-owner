@@ -1,332 +1,371 @@
 # Omega Unified — Context for Claude
 
-> **Purpose:** This is the master context file for any Claude (or other AI
-> assistant) working on this repo. Read it first. It is the source of truth
-> for company info, stack, roles, file structure, Supabase schema, and open
-> bugs. Update it when you make structural changes.
+> **Purpose:** Master context file for any Claude (or other AI) session
+> working on this repo. Read it first. Update it when something
+> structural changes — Ramon will say "atualiza o CLAUDE.md com X".
 
 ---
 
-## 🏢 Company
+## Visão geral
 
-**Omega Development LLC** — premium construction & renovation in Fairfield
-County, Connecticut. Services: decks, kitchens, bathrooms, additions,
-basements, driveways, roofing, full renovations, new construction.
+**Omega Unified** é o aplicativo interno único da **Omega Development LLC**
+— empresa de construção e reformas premium em Fairfield County,
+Connecticut (decks, kitchens, bathrooms, additions, basements,
+driveways, roofing, full renovations, new construction).
 
-### People
-
-| Role | PIN | Person | Notes |
-|---|---|---|---|
-| `owner` | `3333` | Inácio | Company owner. Full read access. |
-| `operations` | `4444` | Brenda | Estimates, contracts, DocuSign, payments, subs. |
-| `sales` | `1111` | Attila | Single salesperson — sees ALL jobs, not scoped. |
-| `manager` | `2222` | Gabriel | Field PM. Phases, warehouse, calendar. **NO money / no contracts.** |
-| `screen` | `5555` | Dash (placeholder) | Read-only pipeline for TV/kiosk displays. |
-| `marketing` | `7777` | Ramon (placeholder) | Read-only pipeline, no financials. |
-| `admin` | `0000` | — | **Hidden route `/admin-x9k2`.** Never audit-logged. |
-
-### Developer
-
-- **Ramon** — builds and maintains the app. Writes in Portuguese (PT-BR),
-  ships the UI in English.
+O app substitui planilhas e troca de mensagens entre os times. Cada
+papel da empresa (dono, vendas, operações, gerente de obra, recepção,
+admin) tem uma interface dedicada que compartilha o mesmo banco
+Supabase. Resolve: pipeline comercial, estimativa, contrato (DocuSign),
+fases de obra, custos, fotos, comunicação com subcontratados (Twilio
+SMS/WhatsApp), e assistência por IA (Claude + Groq).
 
 ---
 
-## 🛠 Stack
+## Stack técnico
 
-- React 18.2 + Vite 5.1 (dev port **5174**)
-- Tailwind CSS 3.4 (custom `omega-*` palette in `tailwind.config.js`)
-- Supabase JS 2.39 (PostgreSQL + Realtime + Storage + Auth-disabled, we use PIN login)
-- Lucide React for icons
-- `@dnd-kit/*` for drag-and-drop (pipeline kanban)
-- No React Router — **state-based routing inside each role App.jsx**; root
-  `App.jsx` switches apps by `user.role` and detects `/admin-x9k2` via
-  `window.location.pathname`.
-- Deploy: **automatic** via Vercel ↔ GitHub. Pushes to `main` on
-  `github.com/ramonpeyroton/omega-owner` trigger a production deploy.
-  Manual fallback: `npx vercel --prod` from the repo root (`.vercel/`
-  folder is still linked locally).
-- AI: Claude (Anthropic) for reports/cost projection, Groq Llama 3.3 for
-  Jarvis chat.
-
----
-
-## 🎨 Design system
-
-- Background: `#FAFAF8` (`bg-omega-cloud`) for body, `#2C2C2A`
-  (`bg-omega-charcoal`) for dark surfaces (sidebars, headers).
-- Accent: `#E8732A` (`text-omega-orange`, `bg-omega-orange`). Hover
-  `#C45E1A` (`bg-omega-dark`).
-- Neutral scale: `omega-slate`/`omega-stone`/`omega-fog` from dark to light.
-- Mobile-first. Min button height 40px on small screens, inputs use 16px
-  font to avoid iOS zoom.
-- Rounded corners: `rounded-xl` default, `rounded-2xl` for modals/cards
-  that want more presence.
+- **Vite 5.1** + **React 18.2** (porta dev `5174`).
+- **Tailwind 3.4** com paleta customizada `omega-*` em `tailwind.config.js`.
+- **Supabase JS 2.39** — Postgres + Realtime + Storage. Auth do Supabase
+  está desativada; usamos PIN login client-side (sem cadastro).
+- **Lucide React** para ícones.
+- **`@dnd-kit/*`** para drag-and-drop (kanban do pipeline).
+- **Sem React Router.** Roteamento é state-based dentro de cada
+  `App.jsx` por papel. O `src/App.jsx` raiz inspeciona
+  `window.location.pathname` para detectar a rota oculta `/admin-x9k2`
+  e algumas rotas públicas. `react-router-dom` ainda aparece em
+  `package.json` mas não é importado em lugar nenhum — pode ser
+  removido numa limpeza futura.
+- **Vercel Functions** em `api/` (Node) — endpoints serverless.
+- **Vercel Cron** definido em `vercel.json` — `/api/daily-owner-update`
+  roda diariamente às `0 13 * * *` (13h UTC).
+- **APIs externas:**
+  - **Anthropic (Claude)** — relatórios de projeto e projeção de custo.
+  - **Groq (Llama 3.3)** — Jarvis chat com tool-calling.
+  - **DocuSign** — contratos, estimates, e acordos com subcontratados.
+  - **Twilio** — SMS + WhatsApp para subcontratados.
+- **Hospedagem:** Vercel.
 
 ---
 
-## 📁 File structure (important bits)
+## Estrutura de pastas
 
 ```
 omega-unified/
-├── api/
-│   └── docusign-webhook.js    — Vercel Function for DocuSign events
-├── public/
+├── api/                      ← Vercel Functions (Node serverless)
+│   ├── daily-owner-update.js   cron diário (resumo do dia pro dono)
+│   ├── docusign-webhook.js     recebe eventos da DocuSign
+│   ├── send-estimate.js        envia estimate por email
+│   ├── send-visit-notification.js  notifica visita ao cliente
+│   ├── sign-estimate.js        gera PDF assinado
+│   ├── transcribe.js           voz → texto (Whisper/Groq)
+│   └── twilio-send.js          SMS/WhatsApp para subs
+├── migrations/               ← 20 SQL migrations numeradas (001–020)
+│                               aplicadas manualmente no Supabase
+├── scripts/                  ← shell scripts one-shot
+│   ├── set-anthropic-key.sh
+│   └── setup-github.sh
+├── public/                   ← assets estáticos servidos como /…
 │   ├── logo.png
-│   └── pitch.html             — standalone pitch deck (standalone HTML)
+│   └── pitch.html              pitch deck standalone
 ├── src/
-│   ├── App.jsx                — root router (role → app, hidden /admin-x9k2)
-│   ├── Login.jsx              — public login (6 roles via PIN)
-│   ├── AdminLogin.jsx         — hidden admin login (/admin-x9k2)
-│   ├── assets/logo.png
-│   ├── components/
-│   │   └── LoadingSpinner.jsx
-│   ├── shared/
-│   │   ├── components/
-│   │   │   ├── PipelineKanban.jsx   — 8-column drag-drop kanban (supports readOnly prop)
-│   │   │   ├── JobFullView.jsx      — full-screen job detail with tabs (Report, Phases, Financials, …)
-│   │   │   ├── JobDetailDrawer.jsx  — legacy slide-in drawer (still used in some places)
-│   │   │   ├── PhaseBreakdown.jsx   — sub-item checklist per phase (used by Owner and JobFullView)
-│   │   │   ├── ProjectReportSection.jsx — AI report viewer (read-only, from `jobs.latest_report`)
-│   │   │   ├── CostProjectionSection.jsx — AI cost projection (cached in `jobs.cost_projection`)
-│   │   │   ├── JobCostingSection.jsx — manual revenue/cost/margin form
-│   │   │   ├── JobExpensesSection.jsx — actual expenses log
-│   │   │   ├── DailyLogsSection.jsx
-│   │   │   ├── TimeTrackingSection.jsx
-│   │   │   ├── PaymentAging.jsx
-│   │   │   ├── PhasePhotos.jsx
-│   │   │   ├── MarkdownReport.jsx   — renders `###SECTION###` AI reports
-│   │   │   ├── NotificationsBell.jsx
-│   │   │   ├── JarvisChat.jsx       — floating chat panel (Groq + role-scoped tools)
-│   │   │   ├── Toast.jsx, StatusBadge.jsx, LoadingSpinner.jsx, COIBadge.jsx
-│   │   ├── config/
-│   │   │   └── phaseBreakdown.js    — per-service phase templates
-│   │   └── lib/
-│   │       ├── supabase.js
-│   │       ├── audit.js             — `logAudit` — **skips admin role**
-│   │       ├── notifications.js
-│   │       ├── docusign.js          — client wrapper (calls /api/docusign/*)
-│   │       ├── anthropic.js         — Claude calls (shared)
-│   │       ├── groq.js              — Groq chat + tool-calling loop
-│   │       ├── jarvisTools.js       — role-scoped tools for Jarvis
-│   │       └── backButtonGuard.js   — prevents browser back from exiting app
-│   └── apps/
-│       ├── owner/     — full Owner UI (dashboard, job detail, subs, reports)
-│       ├── operations/— Brenda's dashboard, contracts, subcontractors, pipeline
-│       ├── sales/     — Attila's home, new job, questionnaire, pipeline
-│       ├── manager/   — Gabriel: phase board, punch list, warehouse, calendar
-│       ├── admin/     — Admin-only (users, pricing, company settings, audit, templates)
-│       ├── screen/    — placeholder (read-only pipeline)
-│       └── marketing/ — placeholder (read-only pipeline)
+│   ├── App.jsx                 router raiz (papel → app, rota oculta admin)
+│   ├── Login.jsx               login público (PIN) — 7 papéis
+│   ├── AdminLogin.jsx          login admin (PIN `0000`, rota /admin-x9k2)
+│   ├── main.jsx                bootstrap React
+│   ├── index.css               Tailwind base + customizações
+│   ├── apps/                   1 sub-app por papel
+│   │   ├── owner/                Inácio — dashboard completo
+│   │   ├── operations/           Brenda — estimates, contratos, subs
+│   │   ├── sales/                Attila — pipeline + novo job
+│   │   ├── manager/              Gabriel — fases, calendário, warehouse
+│   │   ├── receptionist/         Front desk (iPad/PC apenas, não mobile)
+│   │   ├── admin/                Admin — usuários, pricing, audit
+│   │   ├── screen/               TV/kiosk read-only (placeholder)
+│   │   ├── marketing/            Ramon — read-only sem financeiro
+│   │   ├── estimate-view/        público, sem login (cliente vê estimate)
+│   │   └── sub-offer/            público (sub aceita/rejeita oferta)
+│   ├── shared/                 código compartilhado entre apps
+│   │   ├── components/           PipelineKanban, JobFullView,
+│   │   │                         PhaseBreakdown, JarvisChat, etc.
+│   │   ├── lib/                  supabase, audit, anthropic, groq,
+│   │   │                         docusign, twilio, jarvisTools, etc.
+│   │   └── config/               phaseBreakdown.js (templates por serviço)
+│   ├── components/             componentes globais (LoadingSpinner)
+│   ├── public/                 PrivacyPolicy + Terms (páginas públicas)
+│   └── assets/                 logo.png compartilhado
+├── package.json
+├── vercel.json                 rewrites SPA + cron config
+├── vite.config.js              porta 5174
+├── tailwind.config.js          paleta omega-*
+├── postcss.config.js
+├── index.html
+└── .env.example                template das env vars
 ```
-
-Each role app has `App.jsx`, `screens/`, `components/`, `lib/`, `assets/`.
 
 ---
 
-## 🗄 Supabase schema (core tables)
+## Fluxo do app
 
-Project ref: `jbdtdyxzfejhotbjdnwm`. Public anon key in `src/shared/lib/supabase.js`.
+### Papéis e PINs
 
-### jobs (main entity)
-```
-id UUID PK
-client_name, client_phone, client_email, address, city, service
-status (legacy)  — 'draft', 'to_quote', 'in-progress', 'completed', etc.
-pipeline_status  — 'new_lead' | 'estimate_sent' | 'estimate_approved' |
-                   'contract_sent' | 'contract_signed' | 'in_progress' |
-                   'completed' | 'on_hold'
-salesperson_name, pm_name, pm_id
-answers JSONB            — questionnaire answers
-phase_data JSONB         — { phases: [{id,name,completed,items:[{id,label,done}]}] }
-report, report_raw, latest_report   — AI-generated project report (Claude)
-report_generated_at TIMESTAMP
-questionnaire_modified BOOLEAN, questionnaire_modified_at TIMESTAMP
-cost_projection JSONB    — AI cost projection (Anthropic)
-cost_projection_at TIMESTAMP
-pricing_reference JSONB  — legacy
-created_at, updated_at, start_date
-```
+| PIN | Papel | Pessoa | Notas |
+|-----|-------|--------|-------|
+| `3333` | `owner` | Inácio | Dono. Acesso total de leitura. |
+| `4444` | `operations` | Brenda | Estimates, contratos, DocuSign, pagamentos, subs. |
+| `1111` | `sales` | Attila | Vendedor único — vê TODOS os jobs (não filtrado por nome). |
+| `2222` | `manager` | Gabriel | Field PM. Fases, warehouse, calendário. **Sem dinheiro nem contratos.** |
+| `9999` | `receptionist` | Front desk | Lead intake, agendamento. iPad/PC only. |
+| `5555` | `screen` | Dash (placeholder) | Read-only para TV/kiosk. |
+| `7777` | `marketing` | Ramon (placeholder) | Read-only, sem financeiro. |
+| `0000` | `admin` | — | Rota oculta `/admin-x9k2`. **Nunca audit-logged.** |
 
-### estimates
-```
-id, job_id, created_by, status, total_amount, payment_plan JSONB,
-line_items JSONB, notes, sent_at, approved_at, approved_by,
-change_request TEXT, change_requested_at, status_detail
-```
+PINs são checados na ordem: tabela `users` no Supabase primeiro
+(admin-managed), fallback para a tabela hardcoded em `Login.jsx`.
+Admin **nunca** está em `users` — o login admin é exclusivo da rota oculta.
 
-### contracts
-```
-id, job_id, estimate_id, status, docusign_envelope_id, docusign_status,
-payment_plan JSONB, total_amount, deposit_amount,
-sent_at, signed_at, signed_by, pdf_url, deposit_invoice_sent_at
-```
+### Navegação
 
-### change_orders
-```
-id, job_id, contract_id, status, description, amount, reason,
-paid BOOLEAN, paid_at
-```
+- `src/App.jsx` decide qual sub-app renderizar com base em `user.role`.
+- Cada sub-app (`src/apps/<role>/App.jsx`) faz seu próprio roteamento
+  state-based — não há React Router.
+- Rotas públicas (sem login): `/estimate-view/:id`, `/estimate-options/:id`,
+  `/sub-offer/:id`, `/privacy`, `/terms`. Configuradas como rewrites em
+  `vercel.json` para SPA.
+- Rota admin oculta: `/admin-x9k2` (rewrite no Vercel, detectada por
+  `pathname` no React).
 
-### subcontractor_agreements
-```
-id, job_id, subcontractor_id, status, scope_of_work, their_estimate,
-payment_plan JSONB, start_date, end_date, docusign_envelope_id,
-docusign_status, signed_at
-```
+### Pontos importantes
 
-### subcontractors
-```
-id, name, trade, phone, email, tax_id,
-insurance_company, insurance_policy_number,
-coi_url, coi_expiry_date, coi_alert_sent, specialty, active_jobs_count
-```
-
-### job_phases (legacy — being replaced by jobs.phase_data)
-```
-id, job_id, phase, phase_index, tasks, extra_tasks, completed_tasks, started
-```
-
-### job_subs (legacy)
-```
-id, job_id, phase, phase_index, sub_name, sub_phone, message_sent
-```
-
-### job_reports (versioned history)
-```
-id, job_id, report_content TEXT, generated_at, generated_by UUID,
-questionnaire_snapshot JSONB, version INTEGER
-```
-
-### job_costs, job_expenses, phase_photos, daily_logs, time_entries
-(see each component for column list — everything created via `IF NOT
-EXISTS`)
-
-### Admin tables
-- `users` — PIN/role/active (admin is NOT here on purpose)
-- `pricing_reference` — service/item/unit/price_per_unit
-- `company_settings` — name, address, phone, email, license, insurance, logo_url
-- `audit_log` — user_name, user_role, action, entity_type, entity_id, details
-- `message_templates` — name, category, message
-- `notifications` — recipient_role, title, message, type, job_id, read, seen
-
-### RLS
-All tables have permissive RLS (`allow_all_<table>`) to both `anon` and
-`authenticated`. This is intentional for v1 (client-side enforcement
-only — PIN login = no real auth). Tighten when migrating to Supabase Auth.
+- **Questionário** vive no Sales app (`src/apps/sales/`), abre com
+  service-picker e roda os checklists derivados do PDF "Estimate
+  Checklist". Pula o picker se o job já tem um serviço setado.
+- **Attila** vê todos os jobs (sem filtro por `salesperson_name`).
+- **Subcontracted services** pulam o questionário inteiro.
+- **Jarvis** (chat AI flutuante) é montado em todo sub-app via
+  `src/shared/components/JarvisChat.jsx`. Tools são role-scoped via
+  `src/shared/lib/jarvisTools.js`. Backend: Groq Llama 3.3.
 
 ---
 
-## 🔑 Environment variables
+## Caminhos importantes
 
-**Client (exposed to browser — prefix `VITE_`):**
-- `VITE_ANTHROPIC_KEY` — Claude API key (reports + cost projection)
-- `VITE_GROQ_API_KEY` — Groq key (Jarvis chat)
-- `VITE_DOCUSIGN_INTEGRATION_KEY`, `VITE_DOCUSIGN_ACCOUNT_ID`,
-  `VITE_DOCUSIGN_BASE_URL`, `VITE_DOCUSIGN_REDIRECT_URI`
-
-**Server (Vercel Functions only — no `VITE_` prefix):**
-- `DOCUSIGN_INTEGRATION_KEY`, `DOCUSIGN_USER_ID`, `DOCUSIGN_ACCOUNT_ID`
-- `DOCUSIGN_BASE_URL`, `DOCUSIGN_OAUTH_BASE`
-- `DOCUSIGN_PRIVATE_KEY` (RSA PEM)
-- `DOCUSIGN_HMAC_SECRET` (optional)
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (webhook + twilio-send logging)
-- `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
-- `TWILIO_PHONE_NUMBER` (E.164 SMS sender, e.g. `+12035551234`)
-- `TWILIO_WHATSAPP_FROM` (e.g. `whatsapp:+14155238886` — Twilio sandbox or approved sender)
-
-Set on Vercel → Settings → Environment Variables for Production.
+- **Pasta local (Windows):** `C:\Users\ramon\Documents\omega-unified`
+- **GitHub:** https://github.com/ramonpeyroton/omega-owner
+  *(o repo no GitHub se chama `omega-owner`; o nome `omega-unified` é o
+  do package e da pasta local — se renomear o repo no futuro, atualizar
+  aqui.)*
+- **Branch principal:** `main` — sempre trabalhar direto, **sem
+  worktrees nem feature branches**.
+- **URL produção:** https://omega-unified.vercel.app
+- **Painel Vercel:** projeto `omega-unified` no dashboard
+  `tioramos-8681`.
+- **Supabase:** projeto ref `jbdtdyxzfejhotbjdnwm`
+  (URL completa em `.env.example`).
 
 ---
 
-## ✉️ SMS / WhatsApp (Twilio)
+## Deploy
 
-- Server: `api/twilio-send.js` — POSTs to Twilio REST.
-- Client helper: `src/shared/lib/twilio.js` (`sendMessage`, deep-link fallbacks, templates).
-- UI:
-  - Per-phase button in `PhaseBreakdown.jsx` — opens a sub picker (SMS / WhatsApp),
-    pre-fills the confirmation template, sends via `/api/twilio-send`.
-  - Job-wide tab "Contact" in `JobFullView.jsx` (roles: manager, owner, operations, admin).
-  - Manager `PhaseView.jsx` has a "Contact Subs" header toggle that swaps the phase list for the contact list.
-- Audit: every send (success/fail) is written to `message_log` via the service role key
-  — run `migrations/002_message_log.sql` once to create the table.
-- Fallback: if Twilio isn't configured, the modal still lets the user open the native
-  `sms:` URI or `wa.me` link.
+**Automático** via integração Vercel ↔ GitHub. Todo `git push origin main`
+dispara um deploy de produção em 1–2 min. Não usar `npx vercel --prod`
+manual — está obsoleto.
 
-## 🔒 Session / "Remember me"
-
-- Helper: `src/shared/lib/authStorage.js` (`saveSession`, `loadSession`, `clearSession`).
-- Checkbox on both `Login.jsx` and `AdminLogin.jsx` — default **off**.
-  - Off → sessionStorage (same behavior as before, cleared with the tab).
-  - On  → localStorage with 30-day expiry; auto-cleared on next load when expired.
-- Legacy keys `omega_unified_user` / `omega_unified_admin` are still read on first load
-  and migrated to the new v2 keys so existing logged-in sessions don't get bounced.
+A pasta `.vercel/` ainda está linkada localmente (gitignored) caso
+precise rodar `vercel` CLI para debug, mas o caminho normal é
+sempre **commit → push → Vercel constrói**.
 
 ---
 
-## 🤖 Jarvis (AI assistant)
+## Workflow de desenvolvimento
 
-- Component: `src/shared/components/JarvisChat.jsx` (floating panel)
-- Visible on every role's screen (mounted inside each role App)
-- Backend: Groq Llama 3.3 via `src/shared/lib/groq.js`
-- Tools: `src/shared/lib/jarvisTools.js` (role-scoped)
-- Language auto-detect (EN/PT)
-- System prompt adapts per role (addresses Inácio for owner, Brenda for ops, etc.)
+1. **Antes de começar:** `git pull` para sincronizar com a outra máquina.
+2. **Editar código direto na branch `main`** (sem criar worktrees).
+3. **Testar local:** `npm run dev` (porta 5174).
+4. **Commit:** `git add <arquivos>` (de preferência específico, não `git add .`)
+   `git commit -m "tipo: descrição"`.
+5. **Push:** `git push origin main`.
+6. **Deploy automático** dispara na Vercel — verificar em 1–2 min.
 
-Tool access matrix is baked into `getToolsForRole()` in `jarvisTools.js`.
-Financial tools (contracts, payments, change orders, audit) require
-`admin | owner | operations`.
-
----
-
-## 🐛 Known open items
-
-- **Legacy `JobDetailDrawer`** still exists but is no longer the primary
-  path. `JobFullView` is used from PipelineKanban + dashboards. If you
-  make UX changes, apply to both or delete the drawer.
-- **`job_phases` / `job_subs`** tables still exist but the new phase
-  system uses `jobs.phase_data` (JSONB). Leave legacy tables alone for
-  now — some Owner screens still read them.
-- **Punch list** (`punch_list` table) — not created in DB yet. The
-  Jarvis tool `get_active_punch_list_items` handles the missing-table
-  case gracefully.
-- **QA reports** (`relatorio-qa-*.md`) are auto-generated by Anthropic
-  skills and git-ignored.
+Aplicar nova migration: copiar o SQL de `migrations/NNN_*.sql` no SQL
+editor do Supabase e rodar manualmente. Não há migration runner
+automatizado.
 
 ---
 
-## 🚧 Common pitfalls
+## Variáveis de ambiente
 
-1. **Empty strings vs NULL** — Postgres rejects `''` for `date` columns.
-   Forms must convert `''` → `null` before insert/update. See
-   `SubcontractorManager.jsx` for the pattern: `Object.fromEntries(entries
-   .map(([k,v]) => [k, v === '' ? null : v]))`.
-2. **Legacy NOT NULL columns** — the `users` table has historical
-   NOT-NULL columns (e.g. `email`, `password_hash`) that the PIN flow
-   doesn't fill. Those were dropped via migration, but if you create a
-   new env re-run `ALTER TABLE users ALTER COLUMN <col> DROP NOT NULL`.
-3. **Role naming** — support BOTH `sales` and `salesperson` for legacy
-   data. Matrix checks use `normRole()` in `jarvisTools.js`.
-4. **Delete Job PIN** — hardcoded to Owner PIN (`3333`). If PINs change,
-   update `JobFullView.jsx` and `JobDetailDrawer.jsx`.
-5. **Admin is hardcoded** — not in `users` table. Do NOT let admin be
-   deletable via `Admin > Users & Access`. The UI hides it already.
+Definidas em `.env.example`. Setar como Production env vars no Vercel.
+
+**Client (expostas ao browser — prefixo `VITE_`):**
+
+| Var | Obrigatória | Para quê |
+|-----|:-:|---|
+| `VITE_ANTHROPIC_KEY` | ✅ | Claude API (relatórios + cost projection) |
+| `VITE_GROQ_API_KEY` | ✅ | Groq (Jarvis chat) |
+| `VITE_DOCUSIGN_INTEGRATION_KEY` | ⬜ | DocuSign client (opcional em dev) |
+| `VITE_DOCUSIGN_ACCOUNT_ID` | ⬜ | DocuSign client |
+| `VITE_DOCUSIGN_BASE_URL` | ⬜ | default `https://demo.docusign.net/restapi` |
+| `VITE_DOCUSIGN_REDIRECT_URI` | ⬜ | default `http://localhost:5174/docusign/callback` |
+
+**Server (Vercel Functions — sem prefixo `VITE_`):**
+
+| Var | Obrigatória | Para quê |
+|-----|:-:|---|
+| `DOCUSIGN_INTEGRATION_KEY` | ✅ (se usa DocuSign) | servidor DocuSign |
+| `DOCUSIGN_USER_ID` | ✅ (idem) | JWT auth user |
+| `DOCUSIGN_ACCOUNT_ID` | ✅ (idem) | conta DocuSign |
+| `DOCUSIGN_BASE_URL` | ✅ (idem) | default `https://demo.docusign.net/restapi` |
+| `DOCUSIGN_OAUTH_BASE` | ✅ (idem) | default `https://account-d.docusign.net` |
+| `DOCUSIGN_PRIVATE_KEY` | ✅ (idem) | RSA PEM (com `\n` literal) |
+| `DOCUSIGN_HMAC_SECRET` | ⬜ | só se Connect HMAC ativo |
+| `SUPABASE_URL` | ✅ | webhook + twilio-send |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | acesso server-side ao banco |
+| `TWILIO_ACCOUNT_SID` | ✅ (se SMS/WA) | Twilio |
+| `TWILIO_AUTH_TOKEN` | ✅ (se SMS/WA) | Twilio |
+| `TWILIO_PHONE_NUMBER` | ✅ (se SMS) | E.164 (`+1203…`) |
+| `TWILIO_WHATSAPP_FROM` | ✅ (se WA) | `whatsapp:+…` |
+
+**Nunca commitar valores reais.** `.env`, `.env.local` e `.env.*.local`
+estão no `.gitignore`.
 
 ---
 
-## 🧭 Rules for future Claude sessions
+## Identidade Git
 
-1. **Never break what works.** Read before editing.
-2. **Never change PIN login** without explicit approval.
-3. **Mobile-first always.** Check min width 390px.
-4. **Handle loading / empty / error** in every data component.
-5. **Never expose server secrets** to the client (`VITE_` prefix = client).
-6. **App UI is English.** Comments/docs/conversation with Ramon are Portuguese.
-7. **When schema changes, update this file.** Especially the Supabase
-   schema section.
-8. **When you add a role**, update the Roles section above.
-9. **When something's genuinely unknown**, ask Ramon — don't guess.
+Configurada globalmente:
+
+- **Nome:** Ramon Peyroton
+- **Email:** `276171615+ramonpeyroton@users.noreply.github.com`
+  (noreply do GitHub — preserva privacidade do email pessoal)
+
+Se outra máquina não tiver isso ainda:
+
+```bash
+git config --global user.name "Ramon Peyroton"
+git config --global user.email "276171615+ramonpeyroton@users.noreply.github.com"
+```
 
 ---
 
-_Last updated: 2026-04-28 — Ramon + Claude (Opus 4.7)_
+## Trabalho híbrido (duas máquinas)
+
+Ramon trabalha em dois computadores (trabalho e casa). Em ambos:
+
+- A pasta local é a mesma: `C:\Users\ramon\Documents\omega-unified`.
+- Sempre `git pull` ao começar a sessão.
+- Sempre `git push` ao terminar — antes de fechar a máquina.
+- `.claude/` está no `.gitignore`, então cada máquina tem seu próprio
+  estado/config local do Claude Code (permissões, MCPs, etc).
+
+---
+
+## Bugs conhecidos em aberto
+
+- **Building Plans / Survey / Flooring sem questionário.** Quando o
+  serviço escolhido é um dos três adicionados em `4773654 Add Flooring,
+  Survey, and Building Plans services`, o card aparece sem CTA — só o
+  botão "back to home". Falta wire-up do questionário (ou definir que
+  esses serviços não usam um). Verificar
+  `src/apps/sales/screens/QuestionnaireScreen.jsx` (ou equivalente).
+- **Tabela `punch_list`** — referenciada em
+  `jarvisTools.js#get_active_punch_list_items` mas a migration nunca
+  foi criada. A tool trata o erro de tabela ausente, mas o feature não
+  funciona até existir.
+- **Tabelas legacy `job_phases` / `job_subs`** ainda existem no banco;
+  o sistema novo usa `jobs.phase_data` (JSONB). Algumas telas do Owner
+  ainda lêem das antigas — não apagar até migrar tudo.
+- **`JobDetailDrawer` legado** ainda no código mas não é o caminho
+  primário. Path novo é `JobFullView`. Mudanças de UX precisam tocar
+  os dois ou apagar o drawer.
+- **`react-router-dom` em `package.json`** sem nenhum import — pode
+  ser removido numa limpeza.
+
+---
+
+## Decisões de arquitetura tomadas
+
+Outra sessão **não deve refazer ou questionar** sem pedir antes:
+
+- **Stack:** Vite + React (não Next.js, não SSR). Mantém leve e o
+  dev loop é rápido.
+- **Roteamento:** state-based dentro de cada sub-app, não React Router.
+  Manter assim.
+- **Auth:** PIN client-side, RLS permissiva no Supabase. Endurecer auth
+  está adiado até Ramon avisar — não sugerir migração para Supabase Auth.
+- **Deploy:** Vercel ↔ GitHub auto-deploy. Não voltar a `npx vercel --prod`
+  manual.
+- **Branch:** uma só (`main`). Sem worktrees, sem feature branches.
+- **Repositório:** monorepo único — não dividir em
+  owner/manager/sales separados.
+- **`.claude/`** ignorado via `.gitignore`. Permissões e estado do
+  Claude Code são per-machine.
+- **Receptionist é iPad/PC only** — não precisa funcionar em mobile
+  (exceção ao mobile-first geral). Resto do app é mobile-first.
+- **Admin é hardcoded** — não está na tabela `users`. Não permitir que
+  apareça em "Users & Access".
+- **Idioma:** UI em inglês, comentários e conversa com Ramon em PT-BR.
+
+---
+
+## O que NÃO fazer
+
+- ❌ **NÃO criar worktrees novos.** Causa zumbis (Windows segura cwd
+  e diretórios ficam "Device or resource busy"). Trabalhar direto na
+  `main`.
+- ❌ **NÃO criar branches `claude/*`** automáticas.
+- ❌ **NÃO usar `npx vercel --prod`** manual — auto-deploy faz isso.
+- ❌ **NÃO fazer refatorações grandes** sem pedir — projeto está em
+  fase de teste/finalização com clientes reais.
+- ❌ **NÃO commitar `.env.local`** ou qualquer coisa em `.claude/`.
+- ❌ **NÃO mudar PINs** sem aprovação explícita (a regra de delete-job
+  PIN está hardcoded em `JobFullView.jsx` e `JobDetailDrawer.jsx`).
+- ❌ **NÃO sugerir migração para Supabase Auth** — adiada por decisão.
+- ❌ **NÃO usar `git add .`** ou `git add -A` — pode pegar segredos
+  ou arquivos locais. Adicionar arquivos por nome.
+- ❌ **NÃO fazer `git commit --amend` nem `git push --force`** sem
+  pedido explícito.
+
+---
+
+## Common pitfalls
+
+1. **Empty strings vs NULL.** Postgres rejeita `''` em colunas `date`.
+   Forms precisam converter `''` → `null` antes do insert/update. Padrão
+   em `SubcontractorManager.jsx`:
+   `Object.fromEntries(entries.map(([k,v]) => [k, v === '' ? null : v]))`.
+2. **NOT NULL legado em `users`** — colunas históricas (ex. `email`,
+   `password_hash`) que o fluxo PIN não preenche. Já foram dropadas via
+   migration; em ambiente novo rodar `ALTER TABLE users ALTER COLUMN
+   <col> DROP NOT NULL`.
+3. **Role naming dual** — código suporta `sales` E `salesperson` (legado).
+   Verificações usam `normRole()` em `jarvisTools.js`.
+4. **Delete Job PIN** = Owner PIN (`3333`). Hardcoded em
+   `JobFullView.jsx` e `JobDetailDrawer.jsx`. Se PINs mudarem,
+   atualizar ambos.
+5. **Mobile-first** com mínimo 390px de largura, exceto receptionist.
+   Botões mínimo 40px de altura no mobile, inputs 16px de fonte (evita
+   zoom do iOS).
+
+---
+
+## Como pedir atualizações deste arquivo
+
+Sempre que algo importante mudar (nova decisão de arquitetura, novo
+bug encontrado, mudança de fluxo), Ramon pode pedir:
+
+> "atualiza o CLAUDE.md com X"
+
+E o Claude Code edita a seção apropriada. Atualizar também:
+- A linha de "Última atualização" no fim.
+- A seção "Bugs conhecidos" quando algo for resolvido ou descoberto.
+
+---
+
+## Última atualização
+
+**2026-04-28** — Ramon + Claude (Opus 4.7).
+Reescrita completa do CLAUDE.md baseada na análise do estado real do
+repo: stack, 8 papéis em `src/apps/`, 20 migrations, Vercel cron,
+auto-deploy via GitHub, identidade Git global, trabalho híbrido em duas
+máquinas, decisões de arquitetura consolidadas.

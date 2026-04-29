@@ -30,6 +30,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Loader2, AlertCircle, MessageCircle, Link2, RefreshCw, Paperclip, Send,
+  Image as ImageIcon, X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Avatar from './ui/Avatar';
@@ -245,47 +246,111 @@ export default function ProjectChat({ job, user, onJobUpdated }) {
       />
 
       <p className="pt-3 text-[10px] text-omega-fog text-center">
-        Auto-refreshes every 30s · Image upload comes in Sprint 4 next mini-step
+        Auto-refreshes every 30s · Auto-compression of images coming next
       </p>
     </div>
   );
 }
 
 // ─── Message composer ─────────────────────────────────────────────
-// Single-line text input with Enter-to-send / Shift+Enter for new line.
-// Image upload comes in mini-passo 2 of Sprint 4 — for now this is
-// pure text via /api/slack/send-message.
+// Textarea + paperclip + send. Enter sends, Shift+Enter inserts a
+// newline. The paperclip opens a file picker restricted to images
+// (jpg/png/webp/heic). A picked image shows up as a preview chip
+// above the input, with remove. Compression comes in mini-passo 3.
+
+const ACCEPTED_FILE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+const ACCEPTED_FILE_INPUT = '.jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif';
+// 4 MB ceiling — leaves headroom under the ~4.5 MB Vercel body cap so
+// multipart overhead doesn't push us over. Validated again server-side.
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+
 function MessageComposer({ jobId, user, onSent }) {
   const [text, setText] = useState('');
+  const [file, setFile] = useState(null);          // File object
+  const [preview, setPreview] = useState(null);    // object-URL for thumbnail
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const taRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // Revoke the object-URL whenever the file changes so we don't leak.
+  useEffect(() => {
+    if (!file) { setPreview(null); return; }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  function clearFile() {
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  function pickFile(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setError('');
+    // HEIC files sometimes report empty mimetype in browsers that
+    // don't natively decode them — accept by extension as a backup.
+    const looksImage =
+      ACCEPTED_FILE_MIMES.includes(f.type) ||
+      /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name);
+    if (!looksImage) {
+      setError('Only images: JPG, PNG, WEBP or HEIC.');
+      e.target.value = '';
+      return;
+    }
+    if (f.size > MAX_FILE_BYTES) {
+      setError(`Image too large (${(f.size / 1024 / 1024).toFixed(1)} MB). Max 4 MB. Auto-compression comes in the next update.`);
+      e.target.value = '';
+      return;
+    }
+    setFile(f);
+  }
 
   async function send() {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if ((!trimmed && !file) || sending) return;
     setSending(true);
     setError('');
     try {
-      const r = await fetch('/api/slack/send-message', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // Same audit-trail pattern other api/* endpoints already use.
-          'x-omega-user': user?.name || '',
-          'x-omega-role': user?.role || '',
-        },
-        body: JSON.stringify({ jobId, text: trimmed }),
-      });
+      // Branch: multipart when there's a file, JSON otherwise. Each
+      // path goes to the SAME endpoint — the server detects which by
+      // Content-Type. Don't set Content-Type manually for FormData;
+      // the browser adds the boundary string for us.
+      let r;
+      if (file) {
+        const fd = new FormData();
+        fd.append('jobId', jobId);
+        fd.append('text', trimmed);
+        fd.append('file', file, file.name);
+        r = await fetch('/api/slack/send-message', {
+          method: 'POST',
+          headers: {
+            'x-omega-user': user?.name || '',
+            'x-omega-role': user?.role || '',
+          },
+          body: fd,
+        });
+      } else {
+        r = await fetch('/api/slack/send-message', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-omega-user': user?.name || '',
+            'x-omega-role': user?.role || '',
+          },
+          body: JSON.stringify({ jobId, text: trimmed }),
+        });
+      }
       const data = await r.json();
       if (!data.ok) {
         setError(data.error || 'Could not send the message.');
         return;
       }
-      // Clear and refocus so the next message can start typing right
-      // away. Refresh the list so we don't have to wait the full 30s
-      // poll cycle to see our own post show up.
+      // Reset and refocus.
       setText('');
+      clearFile();
       taRef.current?.focus();
       onSent?.();
     } catch (err) {
@@ -296,15 +361,49 @@ function MessageComposer({ jobId, user, onSent }) {
   }
 
   function handleKeyDown(e) {
-    // Enter → send. Shift+Enter → newline (default behavior).
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
     }
   }
 
+  const canSend = (text.trim().length > 0 || !!file) && !sending;
+
   return (
     <div className="border-t border-gray-100 mt-3 pt-3">
+      {/* File preview chip — only shown when an image is queued. */}
+      {file && (
+        <div className="flex items-center gap-2 mb-2 px-2 py-1.5 rounded-xl bg-omega-cloud border border-gray-200 max-w-full">
+          {preview ? (
+            <img
+              src={preview}
+              alt=""
+              className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+            />
+          ) : (
+            <div className="w-10 h-10 rounded-lg bg-omega-pale flex items-center justify-center flex-shrink-0">
+              <ImageIcon className="w-4 h-4 text-omega-orange" />
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-omega-charcoal truncate">{file.name}</p>
+            <p className="text-[10px] text-omega-stone">
+              {(file.size / 1024 / 1024).toFixed(2)} MB
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={clearFile}
+            disabled={sending}
+            className="p-1 rounded-md text-omega-stone hover:text-red-600 hover:bg-white transition disabled:opacity-40"
+            aria-label="Remove attachment"
+            title="Remove attachment"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         <textarea
           ref={taRef}
@@ -312,13 +411,30 @@ function MessageComposer({ jobId, user, onSent }) {
           value={text}
           onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
           onKeyDown={handleKeyDown}
-          placeholder="Write a message…"
+          placeholder={file ? 'Add a caption (optional)…' : 'Write a message…'}
           disabled={sending}
           className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm resize-none focus:border-omega-orange focus:outline-none disabled:opacity-50"
         />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ACCEPTED_FILE_INPUT}
+          className="hidden"
+          onChange={pickFile}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending || !!file}
+          title={file ? 'Remove the current image first' : 'Attach an image'}
+          aria-label="Attach image"
+          className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-gray-200 text-omega-stone hover:border-omega-orange hover:text-omega-orange disabled:opacity-50 transition flex-shrink-0"
+        >
+          <Paperclip className="w-4 h-4" />
+        </button>
         <button
           onClick={send}
-          disabled={!text.trim() || sending}
+          disabled={!canSend}
           title="Send (Enter)"
           aria-label="Send"
           className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-omega-orange text-white hover:bg-omega-dark disabled:opacity-50 transition flex-shrink-0"
@@ -334,7 +450,7 @@ function MessageComposer({ jobId, user, onSent }) {
         <p className="text-xs text-red-600 mt-1.5">{error}</p>
       )}
       <p className="text-[10px] text-omega-stone mt-1.5">
-        Press <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">Enter</kbd> to send · <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">Shift+Enter</kbd> for new line
+        <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">Enter</kbd> to send · <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">Shift+Enter</kbd> for new line · <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">📎</kbd> for image (max 4 MB)
       </p>
     </div>
   );

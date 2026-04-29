@@ -1,28 +1,46 @@
-// Vercel Function: post a new message into the Slack channel linked
-// to a job. Used by the Daily Logs message input (Sprint 4 — UI not
-// built yet).
+// Vercel Function: post a new message — and optionally an image —
+// into the Slack channel linked to a job. Used by the message
+// composer in the Daily Logs tab inside JobFullView.
 //
-// Method: POST
-// Body:   { jobId: string, text: string }
+// Two request shapes accepted:
 //
-// The author shows up in Slack as the bot user (Omega Bot) — Sprint 1
-// decision (Option A: single Bot Token). To attribute the post to the
-// human who sent it, we prepend their name + role to the message text
-// when those headers are present.
+//   1. JSON (text only) — Sprint 4 mini-passo 1
+//      Content-Type: application/json
+//      Body:    { jobId: string, text: string }
 //
-// Response:
-//   { ok: true,  ts: "1714417023.123456", channelId }
-//   { ok: false, error: "..." }
+//   2. multipart/form-data (text + 1 image) — Sprint 4 mini-passo 2
+//      Content-Type: multipart/form-data
+//      Fields:  jobId (string), text (string, optional when file present)
+//      Files:   file (1 image, max 4 MB after compression — see UI)
+//      Allowed mimetypes: image/jpeg, image/png, image/webp, image/heic
+//
+// The bot identity stays the same (Omega Bot). Author attribution
+// happens via a single-line prefix "Ramon Peyroton: <text>" so reading
+// the channel inside Slack still tells you who said what.
 //
 // Required env:
-//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  (read jobs.slack_channel_id)
-//   SLACK_BOT_TOKEN                           (xoxb-...)
+//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+//   SLACK_BOT_TOKEN
+
+import { readFile } from 'node:fs/promises';
+import formidable from 'formidable';
 
 import { supabase, requireSupabase } from '../_lib/supabase.js';
 import { slack, requireSlack } from '../_lib/slack.js';
 import { json, readJson } from '../_lib/http.js';
 
-const MAX_TEXT = 4000; // Slack's hard cap for a single message text.
+const MAX_TEXT  = 4000;                  // Slack hard cap
+const MAX_BYTES = 4 * 1024 * 1024;       // 4 MB — leaves headroom under the
+                                         // ~4.5 MB Vercel body cap.
+const ACCEPTED_MIMES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+]);
+
+// Vercel needs to know NOT to auto-parse the body — formidable will
+// stream the raw multipart payload itself.
+export const config = {
+  api: { bodyParser: false },
+};
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -34,27 +52,61 @@ export default async function handler(req, res) {
   const sl = requireSlack();
   if (!sl.ok) return json(res, 500, sl);
 
-  let payload;
-  try { payload = await readJson(req); }
-  catch { return json(res, 400, { ok: false, error: 'Invalid JSON' }); }
+  // Author attribution — same headers the rest of api/* uses.
+  const userName = (req.headers['x-omega-user'] || '').toString().trim();
 
-  const { jobId } = payload || {};
-  const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+  // Branch on Content-Type. Multipart only when a file is being sent.
+  const contentType = (req.headers['content-type'] || '').toLowerCase();
+  const isMultipart = contentType.includes('multipart/form-data');
+
+  let payload;
+  if (isMultipart) {
+    try { payload = await parseMultipart(req); }
+    catch (err) {
+      return json(res, 400, {
+        ok: false,
+        error: err?.message || 'Could not parse multipart body',
+      });
+    }
+  } else {
+    try { payload = await readJson(req); }
+    catch { return json(res, 400, { ok: false, error: 'Invalid JSON' }); }
+    payload = { ...payload, file: null };
+  }
+
+  const { jobId, text: rawText, file } = payload;
+  const text = typeof rawText === 'string' ? rawText.trim() : '';
 
   if (!jobId || typeof jobId !== 'string') {
     return json(res, 400, { ok: false, error: 'Missing "jobId"' });
   }
-  if (!text) {
-    return json(res, 400, { ok: false, error: 'Missing "text"' });
+
+  // Either text or file (or both). Empty + empty is rejected.
+  if (!text && !file) {
+    return json(res, 400, { ok: false, error: 'Provide a message, an image, or both.' });
   }
   if (text.length > MAX_TEXT) {
     return json(res, 400, { ok: false, error: `Text exceeds ${MAX_TEXT} characters` });
   }
+  if (file) {
+    if (file.size > MAX_BYTES) {
+      return json(res, 400, {
+        ok: false,
+        error: `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 4 MB.`,
+      });
+    }
+    if (!ACCEPTED_MIMES.has(file.mimetype) && !/\.heic$/i.test(file.filename || '')) {
+      return json(res, 400, {
+        ok: false,
+        error: `Unsupported file type "${file.mimetype || 'unknown'}". Allowed: JPG, PNG, WEBP, HEIC.`,
+      });
+    }
+  }
 
-  // 1. Resolve the channel from the job.
+  // Resolve channel from job.
   const { data: job, error: jobErr } = await supabase
     .from('jobs')
-    .select('id, slack_channel_id, client_name, address')
+    .select('id, slack_channel_id')
     .eq('id', jobId)
     .maybeSingle();
   if (jobErr) return json(res, 500, { ok: false, error: jobErr.message });
@@ -66,27 +118,43 @@ export default async function handler(req, res) {
     });
   }
 
-  // 2. Author attribution. Headers x-omega-user / x-omega-role come
-  //    from the frontend (set by the same pattern used in twilio-send).
-  //    Not authentication — just a credit line so the bot's posts
-  //    don't all look anonymous to people reading in Slack.
-  //
-  // Format (Sprint 4): "Ramon Peyroton: <message>" — single-line prefix
-  // chosen to read naturally inside Slack ("Ramon Peyroton: ok, doing
-  // it now"). Frontend's parseAuthorAndBody splits on the ": " when
-  // rendering the message inside the app so the author shows in the
-  // avatar+name slot, not duplicated in the body.
-  const userName = (req.headers['x-omega-user'] || '').toString().trim();
-  const credit   = userName ? `${userName}: ` : '';
+  // Build the human-readable prefix once. Consumed by both branches.
+  const credit = userName ? `${userName}: ` : '';
   const finalText = `${credit}${text}`;
 
-  // 3. Post to Slack.
   try {
+    // ─── Branch A: image upload (text becomes initial_comment) ────
+    if (file) {
+      const fileBuffer = await readFile(file.tempPath);
+      const r = await slack.files.uploadV2({
+        channel_id: job.slack_channel_id,
+        file: fileBuffer,
+        filename: file.filename || 'upload',
+        // initial_comment is what shows above the file preview in
+        // Slack — we put the credit + text here so the post reads
+        // "Ramon Peyroton: take a look" with the photo attached.
+        initial_comment: finalText || credit || undefined,
+      });
+
+      if (!r.ok) {
+        return json(res, 502, {
+          ok: false,
+          error: `Slack returned: ${r.error || 'unknown'}`,
+        });
+      }
+      return json(res, 200, {
+        ok: true,
+        channelId: job.slack_channel_id,
+        // files.uploadV2 returns { files: [...] } not a top-level ts.
+        // The polling fetch will pick the new entry up on next tick.
+        file_id: r.files?.[0]?.id || null,
+      });
+    }
+
+    // ─── Branch B: text-only message ──────────────────────────────
     const r = await slack.chat.postMessage({
       channel: job.slack_channel_id,
       text: finalText,
-      // mrkdwn: true is the default — leaving it explicit avoids
-      // surprises if the SDK default ever changes.
       mrkdwn: true,
     });
 
@@ -108,4 +176,38 @@ export default async function handler(req, res) {
       error: err?.data?.error || err?.message || 'Slack request failed',
     });
   }
+}
+
+// Parse multipart/form-data with formidable. Normalizes the result
+// into a flat { jobId, text, file } shape so the handler doesn't
+// have to deal with formidable's field/file nesting.
+async function parseMultipart(req) {
+  const form = formidable({
+    multiples: false,
+    maxFileSize: MAX_BYTES,
+    keepExtensions: true,
+  });
+  return new Promise((resolve, reject) => {
+    form.parse(req, (err, fields, files) => {
+      if (err) return reject(err);
+      const jobId = pickFirst(fields.jobId);
+      const text  = pickFirst(fields.text) || '';
+      const f     = pickFirst(files.file);
+      const file  = f
+        ? {
+            tempPath: f.filepath,
+            filename: f.originalFilename || 'upload',
+            mimetype: f.mimetype || 'application/octet-stream',
+            size: f.size,
+          }
+        : null;
+      resolve({ jobId, text, file });
+    });
+  });
+}
+
+// formidable v3 returns arrays even for single fields/files. Take [0].
+function pickFirst(v) {
+  if (Array.isArray(v)) return v[0];
+  return v;
 }

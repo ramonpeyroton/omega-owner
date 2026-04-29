@@ -414,6 +414,59 @@ E o Claude Code edita a seção apropriada. Atualizar também:
 
 ---
 
+## Features em desenvolvimento (roadmap)
+
+### Chat por projeto via Slack — em planejamento
+
+**Conceito:** cada card de projeto vai ter uma seção "Daily Logs" que
+mostra mensagens de um canal específico do Slack workspace da Omega
+Development. O Slack é a fonte da verdade dos dados; o app só renderiza
+visualmente dentro do contexto do projeto.
+
+**Decisões já tomadas:**
+
+- **Slack workspace:** já existe, plano Pro (histórico ilimitado, sem
+  perda de dados).
+- **Backend:** APIs em `api/slack/*.js` (Vercel serverless functions).
+- **Database:** tabela `jobs` ganha coluna `slack_channel_id`
+  (Supabase).
+- **Autenticação inicial:** Bot Token único (Opção A) — todas as
+  mensagens postadas pelo app aparecem como "Omega Bot" no Slack.
+  Migrar pra OAuth por usuário (Opção B) só se necessário pós-launch.
+- **Atualização de mensagens:** polling de 30 segundos (não tempo real
+  ainda, suficiente pra começar).
+- **Upload de arquivos:** proxy via backend
+  (`api/slack/upload-file.js`) — navegador nunca toca no token do Slack.
+- **Equipe:** apenas usuários internos da Omega (vendedor, gerente,
+  dono). Cliente externo não tem acesso.
+
+**Cronograma planejado** (4 sprints, 8-10 dias úteis):
+
+- **Sprint 1 — Fundação:** criar Slack App, configurar permissões,
+  gerar tokens, teste de conexão básica.
+- **Sprint 2 — Backend:** APIs `get-messages` e `send-message`, coluna
+  no Supabase.
+- **Sprint 3 — Frontend leitura:** componente `<DailyLogs />` mostrando
+  mensagens dentro do card.
+- **Sprint 4 — Frontend escrita + uploads:** input de mensagem e anexos.
+
+**Status atual:** planejamento concluído, Sprint 1 pendente (a ser
+executado em sessão futura).
+
+**Regra do projeto:** cada Sprint termina com `commit + push` antes de
+iniciar o próximo. Sem trabalho não-commitado entre sprints.
+
+**O que NÃO fazer (decisões de arquitetura travadas):**
+
+- ❌ NÃO armazenar mensagens próprias do app — Slack é fonte da verdade.
+- ❌ NÃO usar WebSocket / Slack Events API ainda (fica pra v2 se
+  necessário).
+- ❌ NÃO implementar OAuth por usuário antes do Bot Token funcionar.
+- ❌ NÃO subir arquivos direto do navegador pro Slack — sempre via
+  proxy backend.
+
+---
+
 ## Última atualização
 
 **2026-04-29** — Ramon + Claude (Opus 4.7).
@@ -423,7 +476,8 @@ duplicadas em `src/apps/<role>/assets/`). Adicionada tabela de
 resto = desktop) — substitui a antiga regra "mobile-first geral".
 Registrada decisão: **sidebars são independentes por role** (não há
 componente compartilhado). Início do redesign visual da sidebar do
-Owner (próxima rodada).
+Owner. Adicionada feature **"Chat via Slack"** no roadmap (planejamento
+concluído, Sprint 1 pendente).
 
 **2026-04-28** — Ramon + Claude (Opus 4.7).
 Reescrita completa do CLAUDE.md baseada na análise do estado real do

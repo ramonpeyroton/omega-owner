@@ -1032,32 +1032,63 @@ function unwrapLiteralAnchors(text) {
   }
 }
 
+// NUL chars are used as placeholder boundaries while building the
+// final HTML. Slack messages don't contain U+0000 in practice, so this
+// is a safe sentinel.
+const TOK_OPEN  = ' ';
+const TOK_CLOSE = ' ';
+
 function renderSlackMrkdwn(text) {
   // Pre-pass: collapse any leftover <a> tags into bare URLs so the
   // URL detector below picks them up cleanly as real links.
   let s = unwrapLiteralAnchors(text).replace(/&/g, '&amp;');
 
+  // Stash table: every <a> we generate is set aside under an integer
+  // token while the rest of the pipeline does its thing. Without this,
+  // the "escape any leftover < and >" pass below would escape OUR OWN
+  // <a> tags into &lt;a&gt; — which is the bug that had the chat
+  // showing literal markup all afternoon.
+  const stash = [];
+  function park(html) {
+    const id = stash.length;
+    stash.push(html);
+    return `${TOK_OPEN}L${id}${TOK_CLOSE}`;
+  }
+
+  // Slack-supplied URLs come in already &-escaped after the step above
+  // (https://x.com/?a=1&b=2 became &amp;), but a real <a href> needs
+  // bare ampersands so the browser can recompose entities at paint time.
+  function fixHref(u) {
+    return u.replace(/&amp;/g, '&');
+  }
+
   // Slack <url|label> — label can contain spaces but no '>' or '|'.
   s = s.replace(
     /<(https?:\/\/[^|\s>]+)\|([^>]+)>/g,
     (_, url, label) =>
-      `<a href="${htmlEscape(url)}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(label)}</a>`,
+      park(`<a href="${htmlEscape(fixHref(url))}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(label)}</a>`),
   );
 
   // Slack <url> — no label.
   s = s.replace(
     /<(https?:\/\/[^|\s>]+)>/g,
     (_, url) =>
-      `<a href="${htmlEscape(url)}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(url)}</a>`,
+      park(`<a href="${htmlEscape(fixHref(url))}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(url)}</a>`),
   );
 
-  // Now safe to escape any remaining angle brackets the user typed.
+  // Bare URLs (no angle brackets). Run BEFORE the < > escape so we can
+  // still match the literal scheme. Trailing punctuation excluded.
+  s = s.replace(
+    /(?<!href=")(?<!\bL\d{1,5} )(https?:\/\/[^\s<]+?)(?=[)\].,!?]*(?:\s|$))/g,
+    (m) => park(`<a href="${htmlEscape(fixHref(m))}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(m)}</a>`),
+  );
+
+  // Now safe to escape any remaining angle brackets the user typed —
+  // every <a> we care about is stashed away as a token.
   s = s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // Mention pills. Backend wrapped the resolved label with U+E000 ..
-  // U+E001 so we can find it without ambiguity. We grab everything
-  // between the markers as the visible label (already includes the
-  // leading @ or #).
+  // U+E001 so we can find it without ambiguity.
   const mentionRe = new RegExp(
     `${MENTION_OPEN}([^${MENTION_OPEN}${MENTION_CLOSE}]+)${MENTION_CLOSE}`,
     'g',
@@ -1066,21 +1097,17 @@ function renderSlackMrkdwn(text) {
     `<span class="${MENTION_CLASS}">${label}</span>`,
   );
 
-  // Bare URLs (no angle brackets). The negative-lookbehind makes sure
-  // we don't rewrite a URL that's already inside an <a href="..."> we
-  // emitted in the steps above. Trailing punctuation is excluded so
-  // "...the link https://example.com." doesn't swallow the period.
-  s = s.replace(
-    /(?<!href=")(https?:\/\/[^\s<]+?)(?=[)\].,!?]*(?:\s|$))/g,
-    (m) => `<a href="${m}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${m}</a>`,
-  );
-
-  // mrkdwn formatting last so it can apply on top of resolved links.
-  return s
+  // mrkdwn formatting now that links are out of the way.
+  s = s
     .replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>')
     .replace(/_([^_\n]+)_/g, '<em>$1</em>')
     .replace(/~([^~\n]+)~/g, '<del>$1</del>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+
+  // Finally, restore the parked <a> tags as real HTML.
+  s = s.replace(new RegExp(`${TOK_OPEN}L(\\d+)${TOK_CLOSE}`, 'g'), (_, id) => stash[Number(id)]);
+
+  return s;
 }
 
 // Slack subtypes that represent a system / housekeeping event rather

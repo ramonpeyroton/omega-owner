@@ -30,11 +30,17 @@
 import { useEffect, useMemo, useState, useRef, Fragment } from 'react';
 import {
   Loader2, AlertCircle, MessageCircle, Link2, RefreshCw, Paperclip, Send,
-  Image as ImageIcon, X,
+  Image as ImageIcon, X, ExternalLink, UserPlus, UserMinus, Hash, Pin,
 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { supabase } from '../lib/supabase';
 import Avatar, { colorFromName } from './ui/Avatar';
+
+// Backend wraps resolved Slack mentions / channel refs / keywords with
+// these BMP Private Use chars so we can find them later. Built with
+// String.fromCharCode so the source file stays printable in any editor.
+const MENTION_OPEN  = String.fromCharCode(0xE000);
+const MENTION_CLOSE = String.fromCharCode(0xE001);
 
 const POLL_MS = 30_000;
 
@@ -233,22 +239,7 @@ export default function ProjectChat({ job, user, onJobUpdated }) {
           </p>
         </div>
       ) : (
-        <ul>
-          {messages.map((m, idx) => {
-            const prev = idx > 0 ? messages[idx - 1] : null;
-            const showDate = !prev || !sameDayCT(m.ts, prev.ts);
-            // Border only between messages within the same date group —
-            // a date chip already provides visual separation when the
-            // day changes, so adding a top border there feels noisy.
-            const showBorder = !showDate && idx > 0;
-            return (
-              <Fragment key={m.ts}>
-                {showDate && <DateSeparator ts={m.ts} />}
-                <MessageRow message={m} withBorder={showBorder} />
-              </Fragment>
-            );
-          })}
-        </ul>
+        <MessageList messages={messages} />
       )}
 
       <MessageComposer
@@ -650,6 +641,117 @@ function MessageComposer({ jobId, user, onSent }) {
   );
 }
 
+// ─── Message list (handles date separators + outbound-link modal) ─
+function MessageList({ messages }) {
+  // External-link confirmation. Clicking any link inside a rendered
+  // message body opens this modal asking whether to leave the app
+  // (it's a small "you're being redirected" guard the field crew
+  // requested). "Yes" pops a new tab; "No" cancels.
+  const [pendingLink, setPendingLink] = useState(null);
+
+  function handleBodyClick(e) {
+    const a = e.target.closest('a[href]');
+    if (!a) return;
+    const href = a.getAttribute('href');
+    if (!href) return;
+    e.preventDefault();
+    setPendingLink(href);
+  }
+
+  return (
+    <>
+      <ul onClick={handleBodyClick}>
+        {messages.map((m, idx) => {
+          const prev = idx > 0 ? messages[idx - 1] : null;
+          const showDate = !prev || !sameDayCT(m.ts, prev.ts);
+          const showBorder = !showDate && idx > 0;
+          return (
+            <Fragment key={m.ts}>
+              {showDate && <DateSeparator ts={m.ts} />}
+              {isSystemMessage(m)
+                ? <SystemRow message={m} />
+                : <MessageRow message={m} withBorder={showBorder} />}
+            </Fragment>
+          );
+        })}
+      </ul>
+      {pendingLink && (
+        <ExternalLinkConfirm
+          href={pendingLink}
+          onCancel={() => setPendingLink(null)}
+          onConfirm={() => {
+            window.open(pendingLink, '_blank', 'noopener,noreferrer');
+            setPendingLink(null);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// ─── System message row (channel_join, pinned_item, etc.) ─────────
+// Slack-style centered hairline-flanked notice. Strips the resolved
+// mention markers so the chip reads as plain text.
+function SystemRow({ message }) {
+  const Icon = systemIconFor(message.subtype);
+  const text = (message.text || '')
+    .replaceAll(MENTION_OPEN, '')
+    .replaceAll(MENTION_CLOSE, '');
+  return (
+    <li className="flex items-center justify-center gap-2 py-1.5 text-[11px] text-omega-stone">
+      <Icon className="w-3 h-3 flex-shrink-0" />
+      <span className="italic">{text || message.subtype?.replace(/_/g, ' ')}</span>
+    </li>
+  );
+}
+
+// ─── Outbound-link confirmation modal ─────────────────────────────
+function ExternalLinkConfirm({ href, onCancel, onConfirm }) {
+  return (
+    <div
+      className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel?.(); }}
+    >
+      <div className="bg-white rounded-2xl shadow-card-hover max-w-sm w-full overflow-hidden">
+        <div className="px-5 pt-5 pb-2 flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-omega-pale flex items-center justify-center flex-shrink-0">
+            <ExternalLink className="w-5 h-5 text-omega-orange" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-bold text-omega-charcoal">
+              Leaving the app
+            </h3>
+            <p className="text-xs text-omega-stone mt-1">
+              You're being redirected to a page outside Omega. Anything
+              you do on the destination is your responsibility. Continue?
+            </p>
+            <p className="mt-2 text-[11px] text-omega-stone font-mono break-all line-clamp-2">
+              {href}
+            </p>
+          </div>
+        </div>
+        <div className="px-5 pb-4 pt-2 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3.5 py-2 rounded-xl text-sm font-semibold text-omega-charcoal hover:bg-omega-cloud border border-gray-200 transition"
+          >
+            No, stay
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-semibold text-white bg-omega-orange hover:bg-omega-dark transition"
+          >
+            <ExternalLink className="w-4 h-4" />
+            Yes, open
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Message row ──────────────────────────────────────────────────
 function MessageRow({ message, withBorder = true }) {
   const { author, body } = useMemo(() => parseAuthorAndBody(message), [message]);
@@ -778,6 +880,11 @@ function htmlEscape(s) {
     .replace(/"/g, '&quot;');
 }
 
+// Mention pill class — neutral blue-tinted bg with bolded text. Same
+// look the field crew is used to from Slack, but using the brand
+// orange family for color consistency with the rest of the app.
+const MENTION_CLASS = 'inline-flex items-baseline px-1.5 rounded bg-omega-pale text-omega-dark font-semibold';
+
 function renderSlackMrkdwn(text) {
   let s = String(text || '').replace(/&/g, '&amp;');
 
@@ -798,6 +905,18 @@ function renderSlackMrkdwn(text) {
   // Now safe to escape any remaining angle brackets the user typed.
   s = s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+  // Mention pills. Backend wrapped the resolved label with U+E000 ..
+  // U+E001 so we can find it without ambiguity. We grab everything
+  // between the markers as the visible label (already includes the
+  // leading @ or #).
+  const mentionRe = new RegExp(
+    `${MENTION_OPEN}([^${MENTION_OPEN}${MENTION_CLOSE}]+)${MENTION_CLOSE}`,
+    'g',
+  );
+  s = s.replace(mentionRe, (_, label) =>
+    `<span class="${MENTION_CLASS}">${label}</span>`,
+  );
+
   // Bare URLs (no angle brackets). The negative-lookbehind makes sure
   // we don't rewrite a URL that's already inside an <a href="..."> we
   // emitted in the steps above. Trailing punctuation is excluded so
@@ -813,4 +932,28 @@ function renderSlackMrkdwn(text) {
     .replace(/_([^_\n]+)_/g, '<em>$1</em>')
     .replace(/~([^~\n]+)~/g, '<del>$1</del>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+
+// Slack subtypes that represent a system / housekeeping event rather
+// than a person's message. Rendered as a thin centered chip instead
+// of a normal row.
+const SYSTEM_SUBTYPES = new Set([
+  'channel_join', 'channel_leave', 'channel_topic',
+  'channel_purpose', 'channel_name', 'channel_archive',
+  'channel_unarchive', 'pinned_item', 'unpinned_item',
+  'bot_add', 'bot_remove',
+]);
+
+function isSystemMessage(message) {
+  return !!message?.subtype && SYSTEM_SUBTYPES.has(message.subtype);
+}
+
+function systemIconFor(subtype) {
+  switch (subtype) {
+    case 'channel_join': return UserPlus;
+    case 'channel_leave': return UserMinus;
+    case 'pinned_item':
+    case 'unpinned_item': return Pin;
+    default: return Hash;
+  }
 }

@@ -24,6 +24,17 @@ import { json, readJson } from '../_lib/http.js';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
+// Token bytes used to wrap resolved Slack mentions / channel refs /
+// keywords in the response text. U+E000 and U+E001 are in the BMP
+// Private Use Area — no font assigns glyphs there, so they stay
+// invisible if anything ever leaks past the frontend's strip step.
+//
+// We use them so the frontend can find resolved mentions and turn
+// them into colored pills without guessing whether "@something" is
+// a mention or a literal "@" the user typed.
+const MENTION_OPEN  = '';
+const MENTION_CLOSE = '';
+
 // In-memory user-id → display name cache. Lives only as long as the
 // serverless function instance stays warm (Vercel reuses warm instances
 // for ~5min of idleness), then cold-starts and rebuilds on next call.
@@ -158,21 +169,26 @@ export default async function handler(req, res) {
 
     // Replace Slack's "magic" entity tokens with human-readable text:
     //   <@U0123ABCDEF>          → @Brenda Souza   (or @user when unknown)
-    //   <#C0123ABCDEF|general>  → #general        (use the label Slack
-    //                                              already gave us)
-    //   <!channel> / <!here>    → @channel / @here
-    // Hyperlinks (<https://...>) are left alone — the frontend
-    // converts those into real <a> tags during rendering so the
-    // user can click them.
+    //   <#C0123ABCDEF|general>  → #general
+    //   <!channel>/<!here>      → @channel/@here
+    // Hyperlinks (<https://...>) are left alone — the frontend converts
+    // those into real <a> tags during rendering so the user can click.
+    //
+    // Wrap each in MENTION_OPEN..MENTION_CLOSE so the frontend can
+    // identify them later and render them as colored pills.
+    function tag(label) {
+      return `${MENTION_OPEN}${label}${MENTION_CLOSE}`;
+    }
+
     function resolveSlackEntities(text) {
       if (!text) return '';
       return text
         .replace(/<@([UW][A-Z0-9]+)(?:\|[^>]+)?>/g, (_, id) => {
           const name = usersMap[id];
-          return name ? `@${name}` : '@user';
+          return tag(`@${name || 'user'}`);
         })
-        .replace(/<#[A-Z0-9]+\|([^>]+)>/g, (_, label) => `#${label}`)
-        .replace(/<!(channel|here|everyone)>/g, (_, kw) => `@${kw}`);
+        .replace(/<#[A-Z0-9]+\|([^>]+)>/g, (_, label) => tag(`#${label}`))
+        .replace(/<!(channel|here|everyone)>/g, (_, kw) => tag(`@${kw}`));
     }
 
     const messages = ordered.map((m) => {
@@ -187,6 +203,9 @@ export default async function handler(req, res) {
         user:             userId,
         user_name:        userName,
         author_photo_url,
+        // Slack message subtype (channel_join, channel_leave, etc).
+        // Surface so the frontend can render system-style rows.
+        subtype:          m.subtype || null,
         text:             resolveSlackEntities(m.text || ''),
         files: Array.isArray(m.files) ? m.files.map((f) => ({
           id:        f.id,

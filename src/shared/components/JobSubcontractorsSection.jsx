@@ -3,6 +3,7 @@ import { HardHat, Plus, X, DollarSign, FileText, Loader2, AlertCircle, Trash2, S
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/audit';
 import { sendMessage, normalizePhone } from '../lib/twilio';
+import { subInlineLabel, subDisplayNames } from '../lib/subcontractor';
 
 // Status chip palette covers both agreements (accepted/signed/completed)
 // and offers (sent/rejected) — they are merged into a single list in
@@ -149,7 +150,10 @@ export default function JobSubcontractorsSection({ job, user }) {
       if (phone) {
         const body = buildOfferSMS({
           language:   sub.preferred_language || 'en',
-          subName:    sub.name,
+          // Personal SMS — use the contact person's name when available
+          // ("Hi Pedro,...") instead of the LLC name. Falls back to the
+          // company name if that's all we have.
+          subName:    subDisplayNames(sub).primary,
           jobAddress: job.address || '',
           link,
         });
@@ -270,7 +274,7 @@ export default function JobSubcontractorsSection({ job, user }) {
                 <option value="">Pick a sub…</option>
                 {subs.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name}{s.trade ? ` — ${s.trade}` : ''}
+                    {subInlineLabel(s)}{s.trade ? ` — ${s.trade}` : ''}
                   </option>
                 ))}
               </select>

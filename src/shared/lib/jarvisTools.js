@@ -53,10 +53,15 @@ function scrubJob(job, role) {
 function scrubSub(sub, role) {
   if (!sub) return sub;
   const r = normRole(role);
-  // Manager sees name/specialty/phone but no insurance/tax details
+  // Manager sees name/specialty/phone but no insurance/tax details.
+  // We expose BOTH `name` (the company / LLC) and `contact_name` (the
+  // person Omega actually deals with) so Jarvis can answer questions
+  // like "who's the contact at ABC Plumbing?" or address the right
+  // person by first name.
   const base = {
     id: sub.id,
     name: sub.name,
+    contact_name: sub.contact_name || null,
     specialty: sub.specialty || sub.trade,
     phone: sub.phone,
     email: sub.email,

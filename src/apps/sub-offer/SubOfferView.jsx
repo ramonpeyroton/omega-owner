@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../shared/lib/supabase';
+import { subDisplayNames, subInlineLabel } from '../../shared/lib/subcontractor';
 
 // Public, auth-less page the subcontractor lands on after Inácio
 // assigns him to a job. URL: /sub-offer/:offerId
@@ -223,8 +224,9 @@ export default function SubOfferView() {
           recipient_role: 'owner',
           type:           'sub_offer_accepted',
           job_id:         offer.job_id,
-          title:          `${sub?.name || 'Subcontractor'} accepted ${job?.client_name || 'the job'}`,
+          title:          `${sub ? subInlineLabel(sub) : 'Subcontractor'} accepted ${job?.client_name || 'the job'}`,
           message:        `Scope: ${offer.scope_of_work || '(no scope)'}. The agreement was created automatically.`,
+
           read:           false,
           seen:           false,
         }]);
@@ -233,7 +235,7 @@ export default function SubOfferView() {
           recipient_role: 'operations',
           type:           'sub_offer_accepted',
           job_id:         offer.job_id,
-          title:          `${sub?.name || 'Subcontractor'} accepted ${job?.client_name || 'the job'}`,
+          title:          `${sub ? subInlineLabel(sub) : 'Subcontractor'} accepted ${job?.client_name || 'the job'}`,
           message:        `Agreement auto-generated. Verify and prepare materials.`,
           read:           false,
           seen:           false,
@@ -269,7 +271,7 @@ export default function SubOfferView() {
           recipient_role: 'owner',
           type:           'sub_offer_rejected',
           job_id:         offer.job_id,
-          title:          `${sub?.name || 'Subcontractor'} rejected ${job?.client_name || 'the job'}`,
+          title:          `${sub ? subInlineLabel(sub) : 'Subcontractor'} rejected ${job?.client_name || 'the job'}`,
           message:        rejectReason.trim()
             ? `Reason: ${rejectReason.trim()}. Pick a different sub.`
             : `No reason given. Pick a different sub.`,
@@ -315,7 +317,11 @@ export default function SubOfferView() {
   return (
     <Frame company={company} t={t}>
       <h1 style={{ fontSize: 24, fontWeight: 900, margin: 0, letterSpacing: '-0.01em' }}>
-        {t.greeting(sub?.name || '')}
+        {/* Personal greeting — use the contact's first name when set,
+            falls back to the company name. The page is the sub
+            personally reading their offer, so seeing "Hi, Pedro!"
+            beats "Hi, ABC Plumbing LLC!". */}
+        {t.greeting(subDisplayNames(sub).primary || '')}
       </h1>
       <p style={{ fontSize: 14, color: '#444', lineHeight: 1.55, margin: '8px 0 24px' }}>
         {t.intro}

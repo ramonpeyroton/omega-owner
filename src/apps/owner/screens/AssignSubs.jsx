@@ -3,6 +3,7 @@ import { ArrowLeft, Search, Phone, Mail, Check, X, UserCheck, MessageCircle, Use
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Toast from '../components/Toast';
+import { subDisplayNames, subInlineLabel } from '../../../shared/lib/subcontractor';
 
 // ── Tools per phase keyword ───────────────────────────────────────────────────
 const PHASE_TOOLS = {
@@ -143,7 +144,7 @@ export default function AssignSubs({ job, phases, onNavigate }) {
         const { data: created } = await supabase.from('job_subs').insert([data]).select().single();
         setAssignments((p) => ({ ...p, [phase]: created }));
       }
-      setToast({ type: 'success', message: `${sub.name} assigned to ${phase}` });
+      setToast({ type: 'success', message: `${subInlineLabel(sub)} assigned to ${phase}` });
     } catch (err) {
       setToast({ type: 'error', message: 'Failed to assign' });
     } finally {
@@ -254,13 +255,17 @@ export default function AssignSubs({ job, phases, onNavigate }) {
                     ? buildSubWhatsApp(sub.phone, sub.name, selectedPhase, phase?.tasks, job.address)
                     : null;
 
+                  const { primary, secondary } = subDisplayNames(sub);
                   return (
                     <div key={sub.id} className={`flex items-start gap-4 p-4 rounded-xl border transition-all ${isAssigned ? 'border-omega-success bg-green-50' : 'border-gray-200 bg-white hover:border-omega-orange/40'}`}>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="font-semibold text-omega-charcoal text-sm">{sub.name}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-semibold text-omega-charcoal text-sm truncate">{primary}</p>
                           {sub.specialty && <span className="text-xs px-2 py-0.5 rounded-full bg-omega-pale text-omega-orange font-medium">{sub.specialty}</span>}
                         </div>
+                        {secondary && (
+                          <p className="text-[11px] text-omega-stone truncate">{secondary}</p>
+                        )}
                         <div className="flex items-center gap-3 mt-1">
                           {sub.phone && <a href={`tel:${sub.phone}`} className="flex items-center gap-1 text-xs text-omega-stone hover:text-omega-orange transition-colors"><Phone className="w-3 h-3" />{sub.phone}</a>}
                           {sub.email && <a href={`mailto:${sub.email}`} className="flex items-center gap-1 text-xs text-omega-stone hover:text-omega-orange transition-colors"><Mail className="w-3 h-3" />{sub.email}</a>}

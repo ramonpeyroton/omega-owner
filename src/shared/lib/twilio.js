@@ -75,7 +75,10 @@ export async function sendMessage({ to, body, channel = 'sms', meta, user } = {}
  */
 export function subConfirmTemplate({ sub, phase, job }) {
   const lines = [];
-  lines.push(`Hi ${sub?.name || ''}, this is Omega Development.`);
+  // Address the contact person by name when we have it ("Hi Pedro,..."),
+  // not the LLC. Falls back to the company name if contact is missing.
+  const greetName = (sub?.contact_name || sub?.name || '').trim();
+  lines.push(`Hi ${greetName}, this is Omega Development.`);
   if (phase?.name)      lines.push(`Phase: ${phase.name}`);
   if (job?.client_name) lines.push(`Client: ${job.client_name}`);
   if (job?.address)     lines.push(`Address: ${job.address}`);

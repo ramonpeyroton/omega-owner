@@ -8,6 +8,7 @@ import StatusBadge from '../components/StatusBadge';
 import COIBadge, { getCoiState } from '../components/COIBadge';
 import SubcontractorCardsView from '../components/SubcontractorCardsView';
 import { logAudit } from '../../../shared/lib/audit';
+import { subInlineLabel } from '../../../shared/lib/subcontractor';
 import { formatPhoneInput, toE164 } from '../../../shared/lib/phone';
 
 // Curated list of trades shown as autocomplete suggestions in the
@@ -451,7 +452,7 @@ export default function SubcontractorManager({ user }) {
                     const job = jobs.find((j) => j.id === a.job_id);
                     return (
                       <tr key={a.id} className="hover:bg-omega-cloud/40">
-                        <td className="px-4 py-3 font-medium text-omega-charcoal">{sub?.name || '—'}</td>
+                        <td className="px-4 py-3 font-medium text-omega-charcoal">{sub ? subInlineLabel(sub) : '—'}</td>
                         <td className="px-4 py-3">{job?.client_name || job?.name || '—'}</td>
                         <td className="px-4 py-3 max-w-xs truncate">{a.scope_of_work || '—'}</td>
                         <td className="px-4 py-3">${Number(a.their_estimate || 0).toLocaleString()}</td>

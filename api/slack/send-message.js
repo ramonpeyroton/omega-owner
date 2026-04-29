@@ -70,11 +70,14 @@ export default async function handler(req, res) {
   //    from the frontend (set by the same pattern used in twilio-send).
   //    Not authentication — just a credit line so the bot's posts
   //    don't all look anonymous to people reading in Slack.
+  //
+  // Format (Sprint 4): "Ramon Peyroton: <message>" — single-line prefix
+  // chosen to read naturally inside Slack ("Ramon Peyroton: ok, doing
+  // it now"). Frontend's parseAuthorAndBody splits on the ": " when
+  // rendering the message inside the app so the author shows in the
+  // avatar+name slot, not duplicated in the body.
   const userName = (req.headers['x-omega-user'] || '').toString().trim();
-  const userRole = (req.headers['x-omega-role'] || '').toString().trim();
-  const credit   = userName
-    ? `*${userName}${userRole ? ` (${userRole})` : ''}*\n`
-    : '';
+  const credit   = userName ? `${userName}: ` : '';
   const finalText = `${credit}${text}`;
 
   // 3. Post to Slack.

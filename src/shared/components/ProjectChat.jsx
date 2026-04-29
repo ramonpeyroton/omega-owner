@@ -29,7 +29,7 @@
 
 import { useEffect, useMemo, useState, useRef } from 'react';
 import {
-  Loader2, AlertCircle, MessageCircle, Link2, RefreshCw, Paperclip,
+  Loader2, AlertCircle, MessageCircle, Link2, RefreshCw, Paperclip, Send,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Avatar from './ui/Avatar';
@@ -238,8 +238,103 @@ export default function ProjectChat({ job, user, onJobUpdated }) {
         </ul>
       )}
 
+      <MessageComposer
+        jobId={job.id}
+        user={user}
+        onSent={() => fetchMessages({ silent: false })}
+      />
+
       <p className="pt-3 text-[10px] text-omega-fog text-center">
-        Auto-refreshes every 30s · Read-only · Posting comes in Sprint 4
+        Auto-refreshes every 30s · Image upload comes in Sprint 4 next mini-step
+      </p>
+    </div>
+  );
+}
+
+// ─── Message composer ─────────────────────────────────────────────
+// Single-line text input with Enter-to-send / Shift+Enter for new line.
+// Image upload comes in mini-passo 2 of Sprint 4 — for now this is
+// pure text via /api/slack/send-message.
+function MessageComposer({ jobId, user, onSent }) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const taRef = useRef(null);
+
+  async function send() {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    setError('');
+    try {
+      const r = await fetch('/api/slack/send-message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Same audit-trail pattern other api/* endpoints already use.
+          'x-omega-user': user?.name || '',
+          'x-omega-role': user?.role || '',
+        },
+        body: JSON.stringify({ jobId, text: trimmed }),
+      });
+      const data = await r.json();
+      if (!data.ok) {
+        setError(data.error || 'Could not send the message.');
+        return;
+      }
+      // Clear and refocus so the next message can start typing right
+      // away. Refresh the list so we don't have to wait the full 30s
+      // poll cycle to see our own post show up.
+      setText('');
+      taRef.current?.focus();
+      onSent?.();
+    } catch (err) {
+      setError(err?.message || 'Network error.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function handleKeyDown(e) {
+    // Enter → send. Shift+Enter → newline (default behavior).
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  }
+
+  return (
+    <div className="border-t border-gray-100 mt-3 pt-3">
+      <div className="flex items-end gap-2">
+        <textarea
+          ref={taRef}
+          rows={2}
+          value={text}
+          onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
+          onKeyDown={handleKeyDown}
+          placeholder="Write a message…"
+          disabled={sending}
+          className="flex-1 px-3 py-2 rounded-xl border border-gray-200 text-sm resize-none focus:border-omega-orange focus:outline-none disabled:opacity-50"
+        />
+        <button
+          onClick={send}
+          disabled={!text.trim() || sending}
+          title="Send (Enter)"
+          aria-label="Send"
+          className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-omega-orange text-white hover:bg-omega-dark disabled:opacity-50 transition flex-shrink-0"
+        >
+          {sending ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Send className="w-4 h-4" />
+          )}
+        </button>
+      </div>
+      {error && (
+        <p className="text-xs text-red-600 mt-1.5">{error}</p>
+      )}
+      <p className="text-[10px] text-omega-stone mt-1.5">
+        Press <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">Enter</kbd> to send · <kbd className="px-1 py-0.5 rounded bg-omega-cloud border border-gray-200 font-mono">Shift+Enter</kbd> for new line
       </p>
     </div>
   );
@@ -286,16 +381,32 @@ function MessageRow({ message }) {
 
 // ─── Helpers ──────────────────────────────────────────────────────
 
-// send-message.js prepends "*Name (role)*\n" before the user's text.
+// send-message.js prepends a credit line before the user's text.
 // Pull that out so the row shows the human author + clean body.
+//
+// Two formats are supported because the credit line shape changed
+// between Sprint 3 and Sprint 4:
+//   * Sprint 4+ (current):  "Ramon Peyroton: hello"
+//   * Sprint 3 (legacy):    "*Ramon Peyroton (sales)*\nhello"
+// Direct Slack-typed posts (no credit line) fall through with no author.
 function parseAuthorAndBody(message) {
   const text = message.text || '';
-  const m = text.match(/^\*([^*]+)\*\n([\s\S]*)$/);
-  if (m) {
-    return { author: stripRoleSuffix(m[1].trim()), body: m[2] };
+
+  // Sprint 4 format. Restrict the "name" half a bit so we don't
+  // mistakenly steal the start of a normal message that happens to
+  // contain a colon (e.g. "URL: https://…"). Names are short, fit
+  // on one line, and don't contain ":" or newlines.
+  const newFmt = text.match(/^([^:\n]{1,60}):\s([\s\S]+)$/);
+  if (newFmt && /[A-Za-z]/.test(newFmt[1])) {
+    return { author: newFmt[1].trim(), body: newFmt[2] };
   }
-  // Direct Slack post (human typed in Slack itself, not via the app).
-  // We don't resolve user IDs to names yet — Sprint TBD.
+
+  // Sprint 3 legacy format.
+  const oldFmt = text.match(/^\*([^*]+)\*\n([\s\S]*)$/);
+  if (oldFmt) {
+    return { author: stripRoleSuffix(oldFmt[1].trim()), body: oldFmt[2] };
+  }
+
   return { author: '', body: text };
 }
 

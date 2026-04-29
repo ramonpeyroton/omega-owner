@@ -309,6 +309,15 @@ pull  =  PUXAR     (GitHub         →  minha máquina)
   2. Criar o bucket **público** `job-covers` em Supabase Storage.
   Frontend lida com `null` graciosamente (mostra placeholder) — então
   a app não quebra antes do setup, mas a feature só funciona depois.
+- **Migration `024_user_profile_fields.sql` + bucket `user-profiles`** —
+  feature de Profile (click no nome na sidebar abre modal) depende de:
+  1. Rodar `migrations/024_user_profile_fields.sql` (adiciona `phone`,
+     `address`, `profile_photo_url` em `users` + cria policies do bucket).
+  2. Criar bucket **público** `user-profiles` no Supabase Storage.
+  Profile só edita pra users **cadastrados na tabela `users`**. Logins
+  via fallback hardcoded (`PIN_TO_ROLE` em `Login.jsx`) abrem o modal
+  em modo read-only com aviso "Ask the admin to register you". Fase 3
+  (auth hardening, próxima rodada) remove o fallback.
 
 ---
 

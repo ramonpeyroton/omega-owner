@@ -15,6 +15,7 @@
 
 export default function Avatar({
   name = '',
+  photoUrl = null,
   size = 'md',
   color = 'orange',
   className = '',
@@ -25,6 +26,7 @@ export default function Avatar({
     sm: 'w-7 h-7 text-xs',
     md: 'w-9 h-9 text-sm',
     lg: 'w-12 h-12 text-base',
+    xl: 'w-20 h-20 text-2xl',
   };
   const colors = {
     // Brand / utility colors.
@@ -45,6 +47,21 @@ export default function Avatar({
     indigo:   'bg-indigo-500 text-white',
     red:      'bg-red-500 text-white',
   };
+  // If a photo URL is provided, render it as the avatar. The colored
+  // initial circle is still used as a visual fallback if the image
+  // ever fails to load (handled below via onError → swap to initial).
+  if (photoUrl) {
+    return (
+      <PhotoAvatar
+        photoUrl={photoUrl}
+        initial={initial}
+        sizeCls={sizes[size] ?? sizes.md}
+        fallbackCls={colors[color] ?? colors.orange}
+        className={className}
+      />
+    );
+  }
+
   return (
     <div
       className={`inline-flex items-center justify-center font-bold rounded-full flex-shrink-0 ${
@@ -52,6 +69,36 @@ export default function Avatar({
       } ${colors[color] ?? colors.orange} ${className}`}
     >
       {initial}
+    </div>
+  );
+}
+
+// Internal split — keeps the hook for the broken-photo state local to
+// the photo branch so the colored-initial branch stays a pure render.
+import { useState } from 'react';
+
+function PhotoAvatar({ photoUrl, initial, sizeCls, fallbackCls, className }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <div
+        className={`inline-flex items-center justify-center font-bold rounded-full flex-shrink-0 ${sizeCls} ${fallbackCls} ${className}`}
+      >
+        {initial}
+      </div>
+    );
+  }
+  return (
+    <div
+      className={`inline-flex rounded-full overflow-hidden flex-shrink-0 bg-omega-cloud ${sizeCls} ${className}`}
+    >
+      <img
+        src={photoUrl}
+        alt=""
+        loading="lazy"
+        onError={() => setBroken(true)}
+        className="w-full h-full object-cover"
+      />
     </div>
   );
 }

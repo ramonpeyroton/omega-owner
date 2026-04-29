@@ -109,6 +109,7 @@ export default function ReceptionistApp({ user, onLogout }) {
         onNavigate={navigate}
         onLogout={onLogout}
         userName={user?.name}
+        user={user}
       />
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Sticky banner reminds the receptionist of any pending visit

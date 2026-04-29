@@ -586,12 +586,19 @@ function MessageRow({ message }) {
 
   // Color the avatar from the resolved author name so each person
   // in the channel gets a stable, distinct hue. Anonymous rows fall
-  // back to muted fog (handled by colorFromName itself).
+  // back to muted fog (handled by colorFromName itself). When the
+  // backend resolved a profile photo for this author (matched by
+  // name in the app's users table), use it instead of the initial.
   const avatarColor = colorFromName(author);
 
   return (
     <li className="flex items-start gap-3 py-3">
-      <Avatar name={author || '?'} size="sm" color={avatarColor} />
+      <Avatar
+        name={author || '?'}
+        size="sm"
+        color={avatarColor}
+        photoUrl={message.author_photo_url || undefined}
+      />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2 flex-wrap">
           <p className="text-sm font-semibold text-omega-charcoal">{author || 'Slack user'}</p>

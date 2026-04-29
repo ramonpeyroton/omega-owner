@@ -127,14 +127,48 @@ export default async function handler(req, res) {
     // "Slack user". One users.list call is enough — we cache it.
     const usersMap = await getUsersMap();
 
+    // Lookup map: app-side `users.name` (lowercased) → profile photo URL.
+    // Used to attach a profile photo to each message based on the
+    // resolved author name. Match is case-insensitive on the trimmed
+    // name; nothing fancy. Names that don't match silently get no
+    // photo and the chat falls back to the colored-initial avatar.
+    let photoByName = {};
+    try {
+      const { data: appUsers } = await supabase
+        .from('users')
+        .select('name, profile_photo_url');
+      for (const u of appUsers || []) {
+        if (u.name && u.profile_photo_url) {
+          photoByName[u.name.trim().toLowerCase()] = u.profile_photo_url;
+        }
+      }
+    } catch {
+      // Non-fatal — chat keeps working without photos.
+    }
+
+    // Also try to resolve the author from any "Name: ..." credit line
+    // the app prepends, so app-posted messages get a photo even when
+    // the underlying Slack user_id maps to "Omega Bot".
+    function resolveAuthorName(message, slackResolved) {
+      const text = message.text || '';
+      const m = text.match(/^([^:\n]{1,60}):\s*([\s\S]*)$/);
+      if (m && /[A-Za-z]/.test(m[1])) return m[1].trim();
+      return slackResolved || null;
+    }
+
     const messages = ordered.map((m) => {
       const userId = m.user || m.bot_id || null;
       const userName = userId ? (usersMap[userId] || null) : null;
+      const authorForPhoto = resolveAuthorName(m, userName);
+      const author_photo_url = authorForPhoto
+        ? (photoByName[authorForPhoto.trim().toLowerCase()] || null)
+        : null;
       return {
-        ts:        m.ts,
-        user:      userId,
-        user_name: userName,
-        text:      m.text || '',
+        ts:               m.ts,
+        user:             userId,
+        user_name:        userName,
+        author_photo_url,
+        text:             m.text || '',
         files: Array.isArray(m.files) ? m.files.map((f) => ({
           id:        f.id,
           name:      f.name,

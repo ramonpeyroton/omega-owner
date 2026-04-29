@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Calendar, UserPlus, List, LogOut } from 'lucide-react';
 import Logo from './Logo';
+import UserProfileModal from '../../../shared/components/UserProfileModal';
 
 const NAV = [
   { id: 'calendar',  label: 'Calendar',  icon: Calendar  },
@@ -13,17 +15,30 @@ const NAV = [
  * Calendar is intentionally on top: that's the default screen she lands
  * on after login so she can see the day before taking the next call.
  */
-export default function Sidebar({ screen, onNavigate, onLogout, userName }) {
+export default function Sidebar({ screen, onNavigate, onLogout, userName, user }) {
+  const [profileOpen, setProfileOpen] = useState(false);
+
   return (
     <aside className="w-56 flex-shrink-0 bg-omega-charcoal flex flex-col min-h-screen">
       <div className="px-5 py-6 border-b border-white/10">
         <Logo size="sm" />
       </div>
 
-      <div className="px-3 py-4 border-b border-white/10">
-        <p className="text-xs text-omega-stone uppercase tracking-widest font-semibold px-2 mb-1">Reception</p>
-        <p className="text-sm font-semibold text-white px-2 truncate">{userName || '—'}</p>
-      </div>
+      <button
+        onClick={() => setProfileOpen(true)}
+        className="px-5 py-4 border-b border-white/10 text-left hover:bg-white/5 transition cursor-pointer"
+        title="Open my profile"
+      >
+        <p className="text-xs text-omega-stone uppercase tracking-widest font-semibold mb-1">Reception</p>
+        <p className="text-sm font-semibold text-white truncate">{userName || '—'}</p>
+      </button>
+
+      <UserProfileModal
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        user={user}
+      />
+
 
       <nav className="flex-1 px-3 py-4 space-y-1">
         {NAV.map(({ id, label, icon: Icon }) => (

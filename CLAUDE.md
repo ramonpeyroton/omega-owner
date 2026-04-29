@@ -319,6 +319,41 @@ pull  =  PUXAR     (GitHub         →  minha máquina)
   em modo read-only com aviso "Ask the admin to register you". Fase 3
   (auth hardening, próxima rodada) remove o fallback.
 
+- **🔴 Slack chat: mensagens postadas via app aparecem com HTML literal
+  no Daily Logs em vez de link clicável puro.** Bug em aberto desde
+  29/04. Sintoma: mensagens novas chegam exibindo
+  `<a href="https://..." target="_blank" rel="noopener noreferrer"
+  class="text-omega-orange...">https://...</a>` literalmente como
+  texto, em vez do link estilizado. **No Slack web aparece normal**
+  — é um problema só do nosso renderer.
+
+  **Já tentado** (sem sucesso) em `src/shared/components/ProjectChat.jsx`:
+  1. Sanitize defensivo no send (`.replace(/<a.../>) → href`).
+  2. Paste handler interceptando `text/html` no clipboard.
+  3. Paste handler detectando `<a>` literal dentro de `text/plain`.
+  4. Display-side `unwrapLiteralAnchors()` com regex.
+  5. Decode entities (`&lt;`, `&gt;`, `&amp;`, `&quot;`) antes do regex.
+  6. **DOMParser** (último deploy `1eb5451`) — também não funcionou.
+
+  **Hipóteses pendentes pra investigar:**
+  - O `text` retornado por `slack.conversations.history` pode estar com
+    encoding numérico (`&#60;a` em vez de `&lt;a`) que `decodeEntities`
+    não cobre. Adicionar handlers pra `&#NN;` e `&#xHH;`.
+  - Pode ter algum char invisível (zero-width) entre o `<` e o `a`
+    impedindo o match do `<a\b/i`.
+  - O fix do `unwrapLiteralAnchors` pode estar caindo no `try/catch` do
+    DOMParser silenciosamente — adicionar log/instrumentação temporária.
+
+  **Próximo passo (sessão futura):**
+  1. Abrir DevTools → aba Network → recarregar Daily Logs
+  2. Inspecionar a response de `POST /api/slack/get-messages` e copiar
+     o `text` exato de uma mensagem problemática
+  3. Comparar com o que o regex/parser espera; ajustar
+  4. Alternativa nuclear: backend novo `unwrapAnchorsBeforeReturn()`
+     em `api/slack/get-messages.js` — fazer a sanitização **server-side**
+     antes do JSON sair, com Node.js HTML parser ou regex robusta.
+     Garante que o frontend nunca vê HTML cru.
+
 ---
 
 ## Decisões de arquitetura tomadas
@@ -504,15 +539,62 @@ iniciar o próximo. Sem trabalho não-commitado entre sprints.
 
 ## Última atualização
 
-**2026-04-29** — Ramon + Claude (Opus 4.7).
+**2026-04-29 (fim do dia)** — Ramon + Claude (Opus 4.7).
+Sessão muito longa — 22 commits. Resumo do que ficou em produção:
+
+- **Logo, viewports, sidebars** — centralização de `src/assets/logo.png`,
+  decisão de viewport por role (Attila/Gabriel = tablet,
+  Receptionist = iPad/PC, resto = desktop), sidebars independentes
+  por role.
+- **Calendar redesign** (Sprint 2C) — header novo, eventos como pílulas,
+  painel direito com Today/Upcoming/MiniCalendar, FiltersMenu popover.
+- **Pipeline redesign** (Sprint 2D) — cards landscape com cover photo
+  (migration 021 + bucket `job-covers`), badge de serviço na cor da
+  coluna, total $ por coluna.
+- **Subcontractor redesign** — `name` virou Company Name + novo campo
+  `contact_name` (migration 022). Card mostra contato em destaque,
+  empresa cinza embaixo. Helper `subInlineLabel()` aplicado em
+  todos os 6 lugares onde sub aparece (manager, dropdown, twilio
+  templates, sub-offer, jarvis).
+- **Slack chat por projeto (Sprints 1-4 do roadmap)** —
+  `api/slack/{get-messages,send-message,file-proxy}.js`, helpers em
+  `api/_lib/`, migration 023 + bucket `job-covers` reaproveitado,
+  componente `ProjectChat.jsx` na aba Daily Logs. Polling 30s,
+  text + image upload com auto-compressão (browser-image-compression),
+  thumbnails inline via proxy, mention pills, system message rows,
+  outbound-link confirmation modal, date separators, color por autor,
+  user profile photos resolvidos por nome.
+- **Profile modal** (Fase 2 do auth track) — migration 024 + bucket
+  `user-profiles`, click em "INACIO" / "BRENDA" / etc na sidebar abre
+  modal com phone/address/photo. Photos aparecem nos avatares do chat
+  via name-match contra `users.name`.
+- **Lead sources** — adicionados Houzz e Mr.NailEdit; "Angie's List"
+  renomeado pra "Angi" (rebrand oficial).
+
+**Pendências de Ramon** (uma vez só, fora do código):
+- Rodar migrations 021, 022, 023, 024 no Supabase
+- Criar buckets `job-covers` e `user-profiles` (PUBLIC) com policies
+- Setar `SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET` na Vercel
+- Adicionar scope `users:read` no Slack App
+- Cadastrar todos os usuários reais em Admin → Users & Access
+  (preparação pra Fase 3 — auth hardening)
+
+**Bug aberto pra retomar:** ver "🔴 Slack chat: mensagens postadas via
+app aparecem com HTML literal" na seção Bugs Conhecidos. 6 tentativas
+de fix (regex de várias formas, DOMParser) não resolveram. Plano pra
+amanhã: capturar o `text` exato vindo da Slack API via DevTools e
+considerar sanitização server-side.
+
+**Pendência futura:** Fase 3 (auth hardening) — validar `name + pin`
+juntos no Login.jsx, remover fallback hardcoded `PIN_TO_ROLE`. Adiada
+até Ramon cadastrar todos os usuários reais.
+
+**2026-04-29 (manhã)** — Ramon + Claude (Opus 4.7).
 Logo centralizada em `src/assets/logo.png` (deletadas 5 cópias
 duplicadas em `src/apps/<role>/assets/`). Adicionada tabela de
-**viewports por role** (Attila/Gabriel = tablet, Receptionist = iPad/PC,
-resto = desktop) — substitui a antiga regra "mobile-first geral".
-Registrada decisão: **sidebars são independentes por role** (não há
-componente compartilhado). Início do redesign visual da sidebar do
-Owner. Adicionada feature **"Chat via Slack"** no roadmap (planejamento
-concluído, Sprint 1 pendente).
+**viewports por role**. Registrada decisão: **sidebars são
+independentes por role**. Adicionada feature **"Chat via Slack"** no
+roadmap (planejamento concluído, Sprint 1 pendente).
 
 **2026-04-28** — Ramon + Claude (Opus 4.7).
 Reescrita completa do CLAUDE.md baseada na análise do estado real do

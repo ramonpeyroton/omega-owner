@@ -448,19 +448,22 @@ visualmente dentro do contexto do projeto.
 - **Sprint 2 — Backend:** ✅ **concluído.** APIs em `api/slack/`,
   helpers compartilhados em `api/_lib/`, migration 023 adiciona
   `jobs.slack_channel_id`, dependência `@slack/web-api` instalada.
-- **Sprint 3 — Frontend leitura:** reaproveitar a aba existente
-  **"Daily Logs"** em `JobFullView` (substitui o render atual baseado
-  na tabela `daily_logs` por mensagens do Slack via `/api/slack/
-  get-messages`). A tabela `daily_logs` original permanece intacta
-  como histórico — não dropar.
+- **Sprint 3 — Frontend leitura:** ✅ **concluído.** Componente
+  `src/shared/components/ProjectChat.jsx` substitui a render anterior
+  na aba **Daily Logs** de `JobFullView`. Polling de 30s, empty state
+  com input pra colar `slack_channel_id`, validação `^[CG][A-Z0-9]{8,}$`,
+  parser leve de Slack mrkdwn (`*bold*` `_italic_` `~strike~` `` `code` ``),
+  parse da credit-line `*Nome (role)*\n` que `send-message.js` prepende
+  pra atribuir o autor humano. `DailyLogsSection` legacy permanece no
+  codebase — não foi deletado.
 - **Sprint 4 — Frontend escrita + uploads:** input de mensagem usando
   `/api/slack/send-message` + endpoint novo `api/slack/upload-file.js`.
 
-**Status atual:** Sprint 2 concluído (backend pronto). Pendente do
-Ramon: rodar a `migration 023`, criar o Slack App (Sprint 1) e setar
-`SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET` na Vercel. Sem isso, as
-APIs novas retornam `500 Slack not configured`. Sprint 3 (frontend
-da aba) pendente, a ser executado em sessão futura.
+**Status atual:** Sprints 2 e 3 concluídos. Pendente do Ramon (uma vez
+só): rodar `migration 023` e setar `SLACK_BOT_TOKEN` + `SLACK_SIGNING_SECRET`
+na Vercel. Sem isso, a aba Daily Logs mostra "Couldn't load Slack
+messages: Slack not configured" mas não quebra nada. Sprint 4 (escrita)
+pendente, a ser executado em sessão futura.
 
 **Regra do projeto:** cada Sprint termina com `commit + push` antes de
 iniciar o próximo. Sem trabalho não-commitado entre sprints.

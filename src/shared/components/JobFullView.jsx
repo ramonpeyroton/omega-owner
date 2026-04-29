@@ -11,6 +11,7 @@ import PhaseBreakdown from './PhaseBreakdown';
 import JobCostingSection from './JobCostingSection';
 import JobExpensesSection from './JobExpensesSection';
 import DailyLogsSection from './DailyLogsSection';
+import ProjectChat from './ProjectChat';
 import TimeTrackingSection from './TimeTrackingSection';
 import ProjectReportSection from './ProjectReportSection';
 import CostProjectionSection from './CostProjectionSection';
@@ -336,7 +337,17 @@ export default function JobFullView({
               <h2 className="text-lg font-bold text-omega-charcoal mb-4 inline-flex items-center gap-2">
                 <FileText className="w-4 h-4 text-omega-orange" /> Daily Logs
               </h2>
-              <DailyLogsSection job={job} user={user} />
+              {/* Sprint 3 of the chat-per-project feature: this tab now
+                  renders the Slack channel linked to the job. The legacy
+                  structured DailyLogsSection (weather, workers on site,
+                  etc.) is intentionally kept in the codebase so we can
+                  surface that history again later if needed — it's just
+                  no longer the primary UX here. */}
+              <ProjectChat
+                job={job}
+                user={user}
+                onJobUpdated={(u) => { setJob(u); onJobUpdated?.(u); }}
+              />
             </div>
           )}
 

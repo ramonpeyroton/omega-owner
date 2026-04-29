@@ -156,6 +156,25 @@ export default async function handler(req, res) {
       return slackResolved || null;
     }
 
+    // Replace Slack's "magic" entity tokens with human-readable text:
+    //   <@U0123ABCDEF>          → @Brenda Souza   (or @user when unknown)
+    //   <#C0123ABCDEF|general>  → #general        (use the label Slack
+    //                                              already gave us)
+    //   <!channel> / <!here>    → @channel / @here
+    // Hyperlinks (<https://...>) are left alone — the frontend
+    // converts those into real <a> tags during rendering so the
+    // user can click them.
+    function resolveSlackEntities(text) {
+      if (!text) return '';
+      return text
+        .replace(/<@([UW][A-Z0-9]+)(?:\|[^>]+)?>/g, (_, id) => {
+          const name = usersMap[id];
+          return name ? `@${name}` : '@user';
+        })
+        .replace(/<#[A-Z0-9]+\|([^>]+)>/g, (_, label) => `#${label}`)
+        .replace(/<!(channel|here|everyone)>/g, (_, kw) => `@${kw}`);
+    }
+
     const messages = ordered.map((m) => {
       const userId = m.user || m.bot_id || null;
       const userName = userId ? (usersMap[userId] || null) : null;
@@ -168,7 +187,7 @@ export default async function handler(req, res) {
         user:             userId,
         user_name:        userName,
         author_photo_url,
-        text:             m.text || '',
+        text:             resolveSlackEntities(m.text || ''),
         files: Array.isArray(m.files) ? m.files.map((f) => ({
           id:        f.id,
           name:      f.name,

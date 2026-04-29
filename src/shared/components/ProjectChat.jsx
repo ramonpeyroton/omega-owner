@@ -27,7 +27,7 @@
 //     Slack message shows up as "U0123…". Bot posts that go through
 //     send-message.js are fine because of the credit line.
 
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef, Fragment } from 'react';
 import {
   Loader2, AlertCircle, MessageCircle, Link2, RefreshCw, Paperclip, Send,
   Image as ImageIcon, X,
@@ -233,10 +233,21 @@ export default function ProjectChat({ job, user, onJobUpdated }) {
           </p>
         </div>
       ) : (
-        <ul className="divide-y divide-gray-100">
-          {messages.map((m) => (
-            <MessageRow key={m.ts} message={m} />
-          ))}
+        <ul>
+          {messages.map((m, idx) => {
+            const prev = idx > 0 ? messages[idx - 1] : null;
+            const showDate = !prev || !sameDayCT(m.ts, prev.ts);
+            // Border only between messages within the same date group —
+            // a date chip already provides visual separation when the
+            // day changes, so adding a top border there feels noisy.
+            const showBorder = !showDate && idx > 0;
+            return (
+              <Fragment key={m.ts}>
+                {showDate && <DateSeparator ts={m.ts} />}
+                <MessageRow message={m} withBorder={showBorder} />
+              </Fragment>
+            );
+          })}
         </ul>
       )}
 
@@ -251,6 +262,67 @@ export default function ProjectChat({ job, user, onJobUpdated }) {
       </p>
     </div>
   );
+}
+
+// ─── Date separator chip ──────────────────────────────────────────
+// Slack-style "Friday, April 17th" / "Today" / "Yesterday" pill that
+// appears between message groups when the calendar day changes.
+function DateSeparator({ ts }) {
+  const label = useMemo(() => formatDateChip(ts), [ts]);
+  return (
+    <li className="flex items-center gap-3 py-3">
+      <div className="flex-1 h-px bg-gray-200" />
+      <span className="px-3 py-1 rounded-full bg-white border border-gray-200 text-[11px] font-semibold text-omega-stone shadow-sm whitespace-nowrap">
+        {label}
+      </span>
+      <div className="flex-1 h-px bg-gray-200" />
+    </li>
+  );
+}
+
+// True when both Slack timestamps fall on the same calendar day in
+// the user's local timezone. We compare year/month/day on local
+// Date objects so a midnight rollover hops the chip cleanly.
+function sameDayCT(ts1, ts2) {
+  if (!ts1 || !ts2) return false;
+  const d1 = new Date(parseFloat(ts1) * 1000);
+  const d2 = new Date(parseFloat(ts2) * 1000);
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  );
+}
+
+function formatDateChip(ts) {
+  if (!ts) return '';
+  const d = new Date(parseFloat(ts) * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((today.getTime() - target.getTime()) / 86400000);
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'long' });
+  const month   = d.toLocaleDateString('en-US', { month: 'long' });
+  const day     = d.getDate();
+  const ord     = ordinalSuffix(day);
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return `${weekday}, ${month} ${day}${ord}${sameYear ? '' : `, ${d.getFullYear()}`}`;
+}
+
+function ordinalSuffix(n) {
+  if (n >= 11 && n <= 13) return 'th';
+  switch (n % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
 }
 
 // ─── File attachment (image inline / chip fallback) ──────────────
@@ -579,7 +651,7 @@ function MessageComposer({ jobId, user, onSent }) {
 }
 
 // ─── Message row ──────────────────────────────────────────────────
-function MessageRow({ message }) {
+function MessageRow({ message, withBorder = true }) {
   const { author, body } = useMemo(() => parseAuthorAndBody(message), [message]);
   const when = useMemo(() => formatSlackTimestamp(message.ts), [message.ts]);
   const html = useMemo(() => renderSlackMrkdwn(body), [body]);
@@ -592,7 +664,7 @@ function MessageRow({ message }) {
   const avatarColor = colorFromName(author);
 
   return (
-    <li className="flex items-start gap-3 py-3">
+    <li className={`flex items-start gap-3 py-3 ${withBorder ? 'border-t border-gray-100' : ''}`}>
       <Avatar
         name={author || '?'}
         size="sm"
@@ -683,12 +755,60 @@ function formatSlackTimestamp(ts) {
 
 // Tiny Slack-mrkdwn → HTML. Handles only the basics + escapes < > &
 // so we never inject raw markup. Safe for dangerouslySetInnerHTML.
-function renderSlackMrkdwn(text) {
-  const escaped = String(text || '')
+//
+// Order matters here:
+//   1. Escape & first so we don't double-encode existing entities.
+//   2. Pull Slack's <url|label> and <url> out BEFORE escaping <
+//      and > — those are the only legitimate uses of angle brackets
+//      Slack sends, and we want them to land in the output as real
+//      <a> tags. Anything else (like a literal "<" the user typed)
+//      gets escaped on the next pass.
+//   3. Bare-URL detection (https://...) catches links that came in
+//      without the angle-bracket wrapper — happens when the user
+//      paste-types a URL or copies one from another app.
+//   4. Finally apply the *bold* / _italic_ / ~strike~ / `code` shorthand.
+
+const LINK_CLASS = 'text-omega-orange underline hover:text-omega-dark break-all';
+
+function htmlEscape(s) {
+  return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return escaped
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderSlackMrkdwn(text) {
+  let s = String(text || '').replace(/&/g, '&amp;');
+
+  // Slack <url|label> — label can contain spaces but no '>' or '|'.
+  s = s.replace(
+    /<(https?:\/\/[^|\s>]+)\|([^>]+)>/g,
+    (_, url, label) =>
+      `<a href="${htmlEscape(url)}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(label)}</a>`,
+  );
+
+  // Slack <url> — no label.
+  s = s.replace(
+    /<(https?:\/\/[^|\s>]+)>/g,
+    (_, url) =>
+      `<a href="${htmlEscape(url)}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${htmlEscape(url)}</a>`,
+  );
+
+  // Now safe to escape any remaining angle brackets the user typed.
+  s = s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Bare URLs (no angle brackets). The negative-lookbehind makes sure
+  // we don't rewrite a URL that's already inside an <a href="..."> we
+  // emitted in the steps above. Trailing punctuation is excluded so
+  // "...the link https://example.com." doesn't swallow the period.
+  s = s.replace(
+    /(?<!href=")(https?:\/\/[^\s<]+?)(?=[)\].,!?]*(?:\s|$))/g,
+    (m) => `<a href="${m}" target="_blank" rel="noopener noreferrer" class="${LINK_CLASS}">${m}</a>`,
+  );
+
+  // mrkdwn formatting last so it can apply on top of resolved links.
+  return s
     .replace(/\*([^*\n]+)\*/g, '<strong>$1</strong>')
     .replace(/_([^_\n]+)_/g, '<em>$1</em>')
     .replace(/~([^~\n]+)~/g, '<del>$1</del>')

@@ -51,9 +51,22 @@ export const SERVICES = [
   { value: 'newconstruction',label: 'New Construction'    },
 ];
 
+// Marketing channels Omega tracks for new leads. Order is
+// alphabetical-ish but with high-volume sources surfaced first
+// ("Google" / "Referral") so the receptionist hits the right one
+// fastest in the dropdown.
 export const LEAD_SOURCES = [
-  'Google', 'Referral', 'HomeAdvisor', 'Angie\'s List',
-  'Door to Door', 'Social Media', 'Repeat Client', 'Drove By', 'Other',
+  'Google',
+  'Referral',
+  'Houzz',
+  'HomeAdvisor',
+  'Angi',          // formerly "Angie's List" — rebranded; kept this name only.
+  'Mr.NailEdit',
+  'Door to Door',
+  'Social Media',
+  'Repeat Client',
+  'Drove By',
+  'Other',
 ];
 
 export const PIPELINE_STATUSES = [

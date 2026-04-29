@@ -319,40 +319,22 @@ pull  =  PUXAR     (GitHub         →  minha máquina)
   em modo read-only com aviso "Ask the admin to register you". Fase 3
   (auth hardening, próxima rodada) remove o fallback.
 
-- **🔴 Slack chat: mensagens postadas via app aparecem com HTML literal
-  no Daily Logs em vez de link clicável puro.** Bug em aberto desde
-  29/04. Sintoma: mensagens novas chegam exibindo
-  `<a href="https://..." target="_blank" rel="noopener noreferrer"
-  class="text-omega-orange...">https://...</a>` literalmente como
-  texto, em vez do link estilizado. **No Slack web aparece normal**
-  — é um problema só do nosso renderer.
-
-  **Já tentado** (sem sucesso) em `src/shared/components/ProjectChat.jsx`:
-  1. Sanitize defensivo no send (`.replace(/<a.../>) → href`).
-  2. Paste handler interceptando `text/html` no clipboard.
-  3. Paste handler detectando `<a>` literal dentro de `text/plain`.
-  4. Display-side `unwrapLiteralAnchors()` com regex.
-  5. Decode entities (`&lt;`, `&gt;`, `&amp;`, `&quot;`) antes do regex.
-  6. **DOMParser** (último deploy `1eb5451`) — também não funcionou.
-
-  **Hipóteses pendentes pra investigar:**
-  - O `text` retornado por `slack.conversations.history` pode estar com
-    encoding numérico (`&#60;a` em vez de `&lt;a`) que `decodeEntities`
-    não cobre. Adicionar handlers pra `&#NN;` e `&#xHH;`.
-  - Pode ter algum char invisível (zero-width) entre o `<` e o `a`
-    impedindo o match do `<a\b/i`.
-  - O fix do `unwrapLiteralAnchors` pode estar caindo no `try/catch` do
-    DOMParser silenciosamente — adicionar log/instrumentação temporária.
-
-  **Próximo passo (sessão futura):**
-  1. Abrir DevTools → aba Network → recarregar Daily Logs
-  2. Inspecionar a response de `POST /api/slack/get-messages` e copiar
-     o `text` exato de uma mensagem problemática
-  3. Comparar com o que o regex/parser espera; ajustar
-  4. Alternativa nuclear: backend novo `unwrapAnchorsBeforeReturn()`
-     em `api/slack/get-messages.js` — fazer a sanitização **server-side**
-     antes do JSON sair, com Node.js HTML parser ou regex robusta.
-     Garante que o frontend nunca vê HTML cru.
+- **Lição armazenada — "renderSlackMrkdwn" e ordem de operações.**
+  Bug que custou ~7 commits hoje 29/04 antes do fix definitivo
+  (`78d709a`). Sintoma: mensagens postadas via app apareciam como HTML
+  literal `<a href="..." class="text-omega-orange...">URL</a>` cru no
+  Daily Logs. **Causa real:** a própria pipeline em
+  `src/shared/components/ProjectChat.jsx` gerava `<a>` tags reais nos
+  passes 3-4 (Slack `<URL>` → `<a>`) e em seguida o passe 5
+  (`/</g, '&lt;'`) escapava ESSES MESMOS `<a>` que ela acabou de gerar.
+  `dangerouslySetInnerHTML` decodava `&lt;a` de volta pra `<a` mas como
+  texto, não como tag. **Solução final** (commit `78d709a`):
+  placeholder tokens — cada `<a>` gerado é estacionado em ` L<id>`
+  (U+0000 NUL ao redor) ANTES do escape pass; restaurados no final.
+  **Lição pra futuras pipelines de markdown→HTML:** se a função
+  GERA HTML em alguns passes e ESCAPA HTML em outros, sempre estacione
+  o gerado em tokens neutros antes do escape. Nunca confiar em "passe
+  na ordem certa" — ordem é frágil, tokens são robustos.
 
 ---
 
@@ -538,6 +520,14 @@ iniciar o próximo. Sem trabalho não-commitado entre sprints.
 ---
 
 ## Última atualização
+
+**2026-04-29 (madrugada — fim de verdade)** — Ramon + Claude (Opus 4.7).
+Conserto definitivo do bug do HTML literal no chat (`78d709a`). Causa
+era ordem de operações no `renderSlackMrkdwn` — pipeline gerava `<a>`
+nos passes 3-4 e o passe 5 (`<` → `&lt;`) destruía. Solução com
+placeholder tokens (U+0000 NUL como sentinela). 7 tentativas anteriores
+chasing the wrong cause foram registradas em "Bugs conhecidos" como
+lição pra próximas pipelines de markdown→HTML. Bug fechado.
 
 **2026-04-29 (fim do dia)** — Ramon + Claude (Opus 4.7).
 Sessão muito longa — 22 commits. Resumo do que ficou em produção:

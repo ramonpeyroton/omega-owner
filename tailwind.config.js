@@ -20,16 +20,18 @@ export default {
           warning: '#B5690A',
           danger: '#8B2635',
           info: '#1A5276',
-          // Calendar event categories — saturated + soft pair for each
-          'event-sales':      '#E8732A',
+          // Calendar event categories — saturated + soft pair for each.
+          // Saturated values mirror EVENT_KIND_META in src/shared/lib/calendar.js
+          // so the design system and the data layer stay in lockstep.
+          'event-sales':      '#E8732A', // omega orange
           'event-sales-bg':   '#FDF0E8',
-          'event-job':        '#15803D',
+          'event-job':        '#22C55E', // green
           'event-job-bg':     '#DCFCE7',
-          'event-service':    '#0369A1',
+          'event-service':    '#3B82F6', // blue
           'event-service-bg': '#DBEAFE',
-          'event-inspect':    '#A16207',
+          'event-inspect':    '#EAB308', // amber
           'event-inspect-bg': '#FEF3C7',
-          'event-meeting':    '#7E22CE',
+          'event-meeting':    '#8B5CF6', // violet
           'event-meeting-bg': '#F3E8FF',
         },
       },

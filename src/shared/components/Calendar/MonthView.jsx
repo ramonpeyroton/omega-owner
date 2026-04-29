@@ -1,16 +1,26 @@
+// MonthView — full month grid with the redesigned look:
+//   • soft white card, rounded-2xl, no per-cell borders (just dividers)
+//   • events render as soft "pills" tinted with the category color
+//   • today gets a circular orange badge for its number plus an
+//     orange ring on the cell itself
+//   • header has a small calendar IconChip + month label + Today button + chevrons
+//
+// Public surface unchanged from the previous version: same props,
+// same buildMonthGrid + EVENT_KIND_META imports. CalendarScreen
+// can swap this in without touching its own logic.
+
 import { useMemo } from 'react';
+import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import {
-  buildMonthGrid, formatMonthCT, EVENT_KIND_META,
+  buildMonthGrid, formatMonthCT, EVENT_KIND_META, isoDateCT,
 } from '../../lib/calendar';
+import IconChip from '../ui/IconChip';
 
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DOW = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
-// Parse an event title into a {primary, secondary} pair so the grid can
-// show the client name in bold and the event type in a dimmer line.
-// Handles three shapes:
-//   1. "Client Name — Sales Visit"  → new format (client first)
-//   2. "Sales Visit — Client Name"  → legacy format
-//   3. Anything else                → primary = raw title, no secondary
+// Parse "Client — Sales Visit" or "Sales Visit — Client" into a
+// {primary, secondary} pair so the pill can show the client in bold
+// and the kind label below in the category color.
 function parseEventTitle(rawTitle, kindLabel) {
   const title = (rawTitle || '').trim();
   if (!kindLabel) return { primary: title, secondary: '' };
@@ -24,23 +34,21 @@ function parseEventTitle(rawTitle, kindLabel) {
   return { primary: title, secondary: '' };
 }
 
-/**
- * Full month grid. Each cell shows up to 3 event dots + "+N more" badge.
- * Click a day → `onDayClick(iso)`. The cell for today gets a subtle
- * orange ring so it's easy to spot.
- */
 export default function MonthView({
   year, monthIndex, events, onDayClick, onPrevMonth, onNextMonth, onToday,
 }) {
   const cells = useMemo(() => buildMonthGrid(year, monthIndex), [year, monthIndex]);
+  const todayIso = isoDateCT(new Date());
 
-  // Bucket events by their CT date string.
   const byDay = useMemo(() => {
     const map = {};
     for (const e of events || []) {
-      const d = new Date(e.starts_at);
-      const iso = isoCT(d);
+      const iso = isoDateCT(new Date(e.starts_at));
       (map[iso] = map[iso] || []).push(e);
+    }
+    // Sort each day's events by start time so the pills come out in order.
+    for (const iso of Object.keys(map)) {
+      map[iso].sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));
     }
     return map;
   }, [events]);
@@ -48,86 +56,121 @@ export default function MonthView({
   const title = formatMonthCT(new Date(Date.UTC(year, monthIndex, 15)));
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 p-3 sm:p-4">
+    <div className="bg-white rounded-2xl shadow-card border border-black/[0.04] overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-lg sm:text-xl font-bold text-omega-charcoal">{title}</h2>
+      <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <IconChip icon={CalendarDays} color="orange" size="sm" />
+          <h2 className="text-base sm:text-lg font-bold text-omega-charcoal">{title}</h2>
+        </div>
         <div className="flex items-center gap-1">
-          <button onClick={onToday} className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-bold hover:border-omega-orange">
+          <button
+            onClick={onToday}
+            className="px-3 py-1.5 rounded-lg bg-omega-cloud text-xs font-semibold text-omega-charcoal hover:bg-omega-pale hover:text-omega-orange transition"
+          >
             Today
           </button>
-          <button onClick={onPrevMonth} aria-label="Previous month" className="p-2 rounded-lg hover:bg-gray-100 text-omega-charcoal">
-            <Chevron dir="left" />
+          <button
+            onClick={onPrevMonth}
+            aria-label="Previous month"
+            className="p-1.5 rounded-lg text-omega-stone hover:bg-omega-cloud hover:text-omega-charcoal transition"
+          >
+            <ChevronLeft className="w-4 h-4" />
           </button>
-          <button onClick={onNextMonth} aria-label="Next month" className="p-2 rounded-lg hover:bg-gray-100 text-omega-charcoal">
-            <Chevron dir="right" />
+          <button
+            onClick={onNextMonth}
+            aria-label="Next month"
+            className="p-1.5 rounded-lg text-omega-stone hover:bg-omega-cloud hover:text-omega-charcoal transition"
+          >
+            <ChevronRight className="w-4 h-4" />
           </button>
         </div>
       </div>
 
       {/* Day-of-week header */}
-      <div className="grid grid-cols-7 gap-1 mb-1">
+      <div className="grid grid-cols-7 border-b border-gray-100">
         {DOW.map((d) => (
-          <div key={d} className="text-[10px] uppercase tracking-widest font-bold text-omega-stone text-center py-1">
+          <div
+            key={d}
+            className="text-[10px] uppercase tracking-widest font-bold text-omega-stone text-center py-2.5"
+          >
             {d}
           </div>
         ))}
       </div>
 
       {/* Day grid */}
-      <div className="grid grid-cols-7 gap-1">
-        {cells.map((c) => {
+      <div className="grid grid-cols-7 grid-rows-6">
+        {cells.map((c, idx) => {
           const dayEvents = byDay[c.iso] || [];
           const visible = dayEvents.slice(0, 3);
           const extra = Math.max(0, dayEvents.length - visible.length);
+          const isToday = c.iso === todayIso;
+
+          // Subtle dividers between cells (right + bottom). Last column
+          // and last row skip them so the card edge stays clean.
+          const isLastCol = (idx + 1) % 7 === 0;
+          const isLastRow = idx >= 35;
+
           return (
             <button
               key={c.iso}
               onClick={() => onDayClick?.(c.iso, dayEvents)}
-              className={`group relative min-h-[70px] sm:min-h-[90px] p-1.5 rounded-lg border text-left transition-all ${
-                c.isCurrentMonth ? 'bg-white' : 'bg-gray-50/60'
-              } ${
-                c.isToday
-                  ? 'border-omega-orange ring-2 ring-omega-orange/40'
-                  : 'border-gray-200 hover:border-omega-orange/40'
-              }`}
+              className={`group relative min-h-[92px] sm:min-h-[110px] p-2 text-left transition ${
+                c.isCurrentMonth ? 'bg-white' : 'bg-omega-cloud/40'
+              } ${isLastCol ? '' : 'border-r border-gray-100'} ${
+                isLastRow ? '' : 'border-b border-gray-100'
+              } ${isToday ? 'ring-1 ring-inset ring-omega-orange/60' : 'hover:bg-omega-cloud/60'}`}
             >
               <div className="flex items-center justify-between">
-                <span className={`text-xs font-bold tabular-nums ${
-                  c.isToday ? 'text-omega-orange' :
-                  c.isCurrentMonth ? 'text-omega-charcoal' : 'text-omega-stone/70'
-                }`}>
-                  {c.day}
-                </span>
-                {dayEvents.length > 0 && (
-                  <span className="text-[9px] font-bold text-omega-stone tabular-nums">{dayEvents.length}</span>
+                {isToday ? (
+                  <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-omega-orange text-white text-[11px] font-bold tabular-nums">
+                    {c.day}
+                  </span>
+                ) : (
+                  <span
+                    className={`text-xs font-semibold tabular-nums ${
+                      c.isCurrentMonth ? 'text-omega-charcoal' : 'text-omega-fog'
+                    }`}
+                  >
+                    {c.day}
+                  </span>
                 )}
               </div>
 
-              <div className="mt-1 space-y-1">
+              <div className="mt-1.5 space-y-1">
                 {visible.map((e) => {
                   const meta = EVENT_KIND_META[e.kind] || { color: '#6B7280', label: e.kind };
                   const { primary, secondary } = parseEventTitle(e.title, meta.label);
                   return (
                     <div
                       key={e.id}
-                      className="relative pl-2 py-0.5 pr-1 rounded-[4px] bg-white border-l-[3px] shadow-[0_1px_0_rgba(0,0,0,0.04)] overflow-hidden"
-                      style={{ borderLeftColor: meta.color, background: meta.color + '14' }}
+                      className="flex items-start gap-1.5 px-1.5 py-1 rounded-md overflow-hidden"
+                      style={{ background: meta.color + '1F' /* ~12% */ }}
                       title={e.title}
                     >
-                      <div className="text-[11px] leading-tight font-bold text-omega-charcoal truncate">
-                        {primary}
+                      <span
+                        className="mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0"
+                        style={{ background: meta.color }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] leading-tight font-semibold text-omega-charcoal truncate">
+                          {primary}
+                        </p>
+                        {secondary && (
+                          <p
+                            className="text-[9px] leading-tight font-bold uppercase tracking-wider truncate mt-0.5"
+                            style={{ color: meta.color }}
+                          >
+                            {secondary}
+                          </p>
+                        )}
                       </div>
-                      {secondary && (
-                        <div className="text-[9px] leading-tight font-semibold uppercase tracking-wider truncate" style={{ color: meta.color }}>
-                          {secondary}
-                        </div>
-                      )}
                     </div>
                   );
                 })}
                 {extra > 0 && (
-                  <div className="text-[9px] font-bold text-omega-orange pl-0.5">+{extra} more</div>
+                  <p className="text-[10px] font-bold text-omega-orange pl-1">+{extra} more</p>
                 )}
               </div>
             </button>
@@ -136,24 +179,4 @@ export default function MonthView({
       </div>
     </div>
   );
-}
-
-function Chevron({ dir }) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor">
-      {dir === 'left'
-        ? <path d="M12.7 5.3L7 11l5.7 5.7L14 15.4 9.8 11 14 6.6 12.7 5.3z" />
-        : <path d="M7.3 5.3L6 6.6 10.2 11 6 15.4l1.3 1.3L13 11 7.3 5.3z" />
-      }
-    </svg>
-  );
-}
-
-// Small local wrapper around `isoDateCT` so MonthView stays self-contained
-// if someone imports it in isolation. Avoids a second import path.
-function isoCT(d) {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(d).filter((p) => p.type !== 'literal').map((p) => p.value).join('-');
 }

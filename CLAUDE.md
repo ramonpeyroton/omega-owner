@@ -509,6 +509,55 @@ iniciar o próximo. Sem trabalho não-commitado entre sprints.
 
 ## Última atualização
 
+**2026-04-30 (madrugada — QuickBooks read-only)** — Ramon + Claude (Opus 4.7).
+Sprint 2 do Finance entregue: integração QuickBooks read-only.
+
+**Backend** (`api/quickbooks/*` + `api/_lib/quickbooks.js`):
+- Migration 027 — tabela `quickbooks_tokens` (1 row por realm/company,
+  guarda access+refresh tokens, expiração, ambiente sandbox/production).
+- `auth.js` — inicia OAuth (302 → Intuit Authorize URL com state CSRF).
+- `callback.js` — recebe code+realmId, troca por tokens, persiste,
+  302 de volta com `?qb=connected` ou `?qb=error&reason=`.
+- `status.js` — diz se há conexão ativa.
+- `disconnect.js` — revoga em Intuit + apaga linha.
+- `balances.js` — query QBO API por contas Bank/Credit Card ativas,
+  retorna saldos.
+- Helpers: `getValidAccessToken()` faz refresh automático se o
+  access_token expira em <60s, persistindo o novo refresh_token (que
+  rotaciona a cada call — perder = perder conexão).
+
+**Frontend** ([FinanceScreen.jsx](src/shared/components/Finance/FinanceScreen.jsx)
+Company tab):
+- Card "Saldos das contas (QuickBooks)" com botão "Conectar QuickBooks"
+  (verde QB) quando desconectado.
+- Quando conectado: lista das contas com saldo, botões "Atualizar" e
+  "Desconectar", timestamp da última atualização.
+- Toast de sucesso/erro lendo `?qb=connected|error&reason=` da URL após
+  bounce-back do OAuth.
+
+**Env vars necessárias no Vercel** (Ramon setou):
+- `QUICKBOOKS_CLIENT_ID`
+- `QUICKBOOKS_CLIENT_SECRET`
+- `QUICKBOOKS_REDIRECT_URI`
+- `QUICKBOOKS_API_BASE` (sandbox: `https://sandbox-quickbooks.api.intuit.com`)
+- `QUICKBOOKS_ENV` (sandbox / production)
+
+**Pendências do Ramon:**
+- Rodar **migration 027** no Supabase.
+- (Já feito) Setar env vars no Vercel.
+- Testar fluxo OAuth completo: ir em Finance → Company → "Conectar
+  QuickBooks" → escolher sandbox company → autorizar → ver saldos.
+- Quando estiver pronto pra produção: completar tasks "App details" no
+  Intuit Developer Portal pra desbloquear Production credentials, daí
+  trocar `QUICKBOOKS_*` env vars pra Production e ajustar
+  `QUICKBOOKS_API_BASE` pra `https://quickbooks.api.intuit.com`.
+
+**O que NÃO está implementado** (decisões travadas):
+- Sync write (Sprint 4 / opção C) — app não escreve no QB. Sempre
+  read-only. Marcar pagamento no app NÃO cria invoice no QB.
+- Lembretes automáticos (Sprint 2A) — adiados, ver memory file
+  `project_finance_reminders_pending.md`.
+
 **2026-04-30 (noite — Finance v1)** — Ramon + Claude (Opus 4.7).
 Sprint 1 da área Financeiro entregue. Item "Finance" novo na sidebar
 de **owner / operations / admin** (Brenda + Inácio + admin). Página

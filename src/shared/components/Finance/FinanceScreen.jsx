@@ -121,13 +121,22 @@ export default function FinanceScreen({ user }) {
 function CompanyTab() {
   const [loading, setLoading] = useState(true);
   const [totals, setTotals] = useState(null);
+  const [qb, setQb] = useState({ status: 'loading' });
+  // QB connect/disconnect feedback (set from URL query after callback).
+  const [qbToast, setQbToast] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const t = await loadFinanceTotals();
-        if (!cancelled) setTotals(t);
+        const [t, qbRes] = await Promise.all([
+          loadFinanceTotals(),
+          loadQbBalances(),
+        ]);
+        if (!cancelled) {
+          setTotals(t);
+          setQb(qbRes);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -135,12 +144,63 @@ function CompanyTab() {
     return () => { cancelled = true; };
   }, []);
 
+  // Read ?qb=connected / ?qb=error from URL after OAuth bounce-back
+  // and surface a toast. Then strip the params so a refresh doesn't
+  // re-trigger.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const qbParam = url.searchParams.get('qb');
+    if (!qbParam) return;
+    if (qbParam === 'connected') {
+      setQbToast({ type: 'success', message: 'QuickBooks conectado!' });
+    } else if (qbParam === 'error') {
+      const reason = url.searchParams.get('reason') || 'unknown';
+      setQbToast({ type: 'error', message: `Falha ao conectar: ${reason}` });
+    }
+    url.searchParams.delete('qb');
+    url.searchParams.delete('reason');
+    window.history.replaceState({}, '', url.toString());
+  }, []);
+
+  async function reloadBalances() {
+    setQb({ status: 'loading' });
+    setQb(await loadQbBalances());
+  }
+
+  async function handleDisconnect() {
+    if (!window.confirm('Desconectar QuickBooks?')) return;
+    try {
+      const res = await fetch('/api/quickbooks/disconnect', { method: 'POST' });
+      if (!res.ok) throw new Error((await res.json()).error || 'Falhou');
+      setQb({ status: 'disconnected' });
+      setQbToast({ type: 'success', message: 'QuickBooks desconectado.' });
+    } catch (err) {
+      setQbToast({ type: 'error', message: err.message });
+    }
+  }
+
   if (loading) {
     return <div className="flex items-center gap-2 text-omega-stone"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>;
   }
 
   return (
     <div className="space-y-6">
+      {qbToast && (
+        <div className={`rounded-xl px-4 py-3 text-sm font-semibold border ${
+          qbToast.type === 'success'
+            ? 'bg-green-50 text-green-800 border-green-200'
+            : 'bg-red-50 text-red-700 border-red-200'
+        }`}>
+          {qbToast.message}
+          <button
+            onClick={() => setQbToast(null)}
+            className="ml-3 text-xs opacity-60 hover:opacity-100"
+          >
+            dismiss
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <SummaryCard
           icon={ArrowDownCircle} tone="green"
@@ -159,20 +219,102 @@ function CompanyTab() {
       </div>
 
       <div className="bg-white border border-gray-200 rounded-2xl p-6">
-        <h3 className="font-bold text-omega-charcoal flex items-center gap-2">
-          <Building2 className="w-4 h-4 text-omega-orange" /> Saldos das contas
-        </h3>
-        <p className="text-sm text-omega-stone mt-1 mb-4">
-          Vai puxar do QuickBooks na próxima onda. Por enquanto, gerencie as
-          contas em <strong>Bank Accounts</strong> no topo.
-        </p>
-        <div className="rounded-xl bg-omega-cloud border border-dashed border-gray-300 p-4 text-sm text-omega-stone">
-          Integração com QuickBooks: read-only para saldos e identificação de
-          conta destino. <em>Sprint 2.</em>
+        <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+          <div>
+            <h3 className="font-bold text-omega-charcoal flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-omega-orange" /> Saldos das contas (QuickBooks)
+            </h3>
+            {qb.status === 'connected' && (
+              <p className="text-[11px] text-omega-stone mt-1">
+                Atualizado{qb.fetchedAt ? ` em ${new Date(qb.fetchedAt).toLocaleString()}` : ''} · {qb.environment}
+              </p>
+            )}
+          </div>
+          {qb.status === 'connected' ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={reloadBalances}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 hover:border-omega-orange text-xs font-semibold"
+              >
+                <Loader2 className={`w-3.5 h-3.5 ${qb.status === 'loading' ? 'animate-spin' : ''}`} /> Atualizar
+              </button>
+              <button
+                onClick={handleDisconnect}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-gray-200 hover:bg-red-50 hover:border-red-200 hover:text-red-700 text-xs font-semibold"
+              >
+                Desconectar
+              </button>
+            </div>
+          ) : qb.status === 'disconnected' ? (
+            <a
+              href="/api/quickbooks/auth"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#2CA01C] hover:bg-[#1f7714] text-white text-sm font-semibold"
+            >
+              <Banknote className="w-4 h-4" /> Conectar QuickBooks
+            </a>
+          ) : (
+            <span className="text-xs text-omega-stone">{qb.message || 'Não foi possível verificar status'}</span>
+          )}
         </div>
+
+        {qb.status === 'connected' && qb.accounts?.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {qb.accounts.map((a) => (
+              <div key={a.id} className="rounded-xl border border-gray-200 p-4">
+                <p className="text-[10px] uppercase tracking-wider text-omega-stone font-semibold">{a.type}{a.subType ? ` · ${a.subType}` : ''}</p>
+                <p className="font-bold text-omega-charcoal text-sm mt-1">{a.name}</p>
+                <p className={`text-xl font-bold mt-2 ${a.currentBalance < 0 ? 'text-red-600' : 'text-omega-charcoal'}`}>
+                  {money(a.currentBalance)} <span className="text-[10px] font-normal text-omega-stone">{a.currency}</span>
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {qb.status === 'connected' && qb.accounts?.length === 0 && (
+          <div className="rounded-xl bg-omega-cloud border border-dashed border-gray-300 p-4 text-sm text-omega-stone">
+            Conectado, mas nenhuma conta bancária ou cartão de crédito ativa encontrada no QuickBooks.
+          </div>
+        )}
+
+        {qb.status === 'disconnected' && (
+          <div className="rounded-xl bg-omega-cloud border border-dashed border-gray-300 p-4 text-sm text-omega-stone">
+            Conecte o QuickBooks pra ver os saldos das contas em tempo real. Read-only — nenhum dado é alterado.
+          </div>
+        )}
+
+        {qb.status === 'error' && (
+          <div className="rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-700">
+            Erro ao buscar saldos: {qb.message}
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+// Loads QB connection status + balances in one call. Returns one of:
+//   { status: 'connected', accounts, environment, fetchedAt }
+//   { status: 'disconnected' }
+//   { status: 'error', message }
+async function loadQbBalances() {
+  try {
+    const res = await fetch('/api/quickbooks/balances');
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { status: 'error', message: body.error || `HTTP ${res.status}` };
+    }
+    const data = await res.json();
+    if (!data.connected) return { status: 'disconnected' };
+    return {
+      status: 'connected',
+      accounts: data.accounts || [],
+      environment: data.environment,
+      fetchedAt: data.fetchedAt,
+    };
+  } catch (err) {
+    return { status: 'error', message: err?.message || 'Network error' };
+  }
 }
 
 function SummaryCard({ icon: Icon, label, value, sub, tone }) {

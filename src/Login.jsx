@@ -23,7 +23,10 @@ const PIN_TO_ROLE = {
 const BLOCKED_PINS = new Set(['0000']);
 
 export default function Login({ onLogin }) {
-  const [name, setName] = useState('');
+  // Field is labelled "Username" but a legacy free-text name still
+  // works (see fallback chain in handleSubmit). Keeping the state var
+  // generic so the input stays the source of truth for both paths.
+  const [identifier, setIdentifier] = useState('');
   const [pin, setPin] = useState('');
   const [showPin, setShowPin] = useState(false);
   const [remember, setRemember] = useState(false);
@@ -33,7 +36,8 @@ export default function Login({ onLogin }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (!name.trim()) { setError('Please enter your name'); return; }
+    const typed = identifier.trim();
+    if (!typed) { setError('Please enter your username'); return; }
     setLoading(true);
 
     // Silently block admin PINs in the public login — they only work via
@@ -41,35 +45,65 @@ export default function Login({ onLogin }) {
     // hint that this PIN is reserved.
     if (BLOCKED_PINS.has(pin)) {
       setLoading(false);
-      setError('Incorrect PIN. Please try again.');
+      setError('Incorrect username or PIN. Please try again.');
       return;
     }
 
     let role = null;
-    let resolvedName = name.trim();
+    let resolvedName = typed;
+    let resolvedId = null;
 
-    // 1. DB lookup first — admin-managed users table
+    // 1. Primary lookup: username + PIN — case-insensitive on
+    // username via lower() (matches the unique index in migration
+    // 025). This is the path admin-created users go through.
     try {
       const { data } = await supabase
         .from('users')
-        .select('name, role, pin, active')
+        .select('id, name, role, pin, active, username')
         .eq('pin', pin)
         .eq('active', true)
+        .ilike('username', typed)
         .maybeSingle();
       if (data && data.role && data.role !== 'admin') {
         role = data.role;
-        if (!resolvedName && data.name) resolvedName = data.name;
+        resolvedName = data.name || resolvedName;
+        resolvedId = data.id;
       }
     } catch {
-      /* users table may not exist yet — fall through to static map */
+      /* users table or username column may not exist yet — fall through */
     }
 
-    // 2. Fallback to hardcoded defaults
+    // 2. Legacy fallback: PIN + name match. Covers users created
+    // before migration 025 (no username yet) — they typed their full
+    // name in the field and we look that up against `users.name`.
+    if (!role) {
+      try {
+        const { data } = await supabase
+          .from('users')
+          .select('id, name, role, pin, active')
+          .eq('pin', pin)
+          .eq('active', true)
+          .ilike('name', typed)
+          .maybeSingle();
+        if (data && data.role && data.role !== 'admin') {
+          role = data.role;
+          resolvedName = data.name || resolvedName;
+          resolvedId = data.id;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 3. Final fallback: hardcoded PIN_TO_ROLE map for users that
+    // haven't been registered in `users` yet (Inácio with PIN 3333,
+    // Brenda with 4444, etc). Whatever they typed in the field
+    // becomes the displayed name.
     if (!role) role = PIN_TO_ROLE[pin] || null;
 
     if (!role) {
       setLoading(false);
-      setError('Incorrect PIN. Please try again.');
+      setError('Incorrect username or PIN. Please try again.');
       return;
     }
 
@@ -77,7 +111,7 @@ export default function Login({ onLogin }) {
     await new Promise((r) => setTimeout(r, 400));
     setLoading(false);
 
-    const user = { name: resolvedName, role };
+    const user = { id: resolvedId, name: resolvedName, role };
     // Fire-and-forget audit log
     logAudit({ user, action: 'user.login', entityType: 'user', details: { role, remember } });
     onLogin(user, { remember });
@@ -95,14 +129,17 @@ export default function Login({ onLogin }) {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold tracking-wider text-omega-fog uppercase mb-2">
-              Your Name
+              Username
             </label>
             <input
               type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Alex Rivera"
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
+              placeholder="e.g. inacio"
               autoFocus
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               className="w-full px-4 py-3.5 rounded-xl bg-white/10 border border-white/20 text-white placeholder-omega-stone focus:outline-none focus:border-omega-orange focus:bg-white/15 transition-all text-base"
             />
           </div>

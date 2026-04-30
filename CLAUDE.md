@@ -509,6 +509,33 @@ iniciar o próximo. Sem trabalho não-commitado entre sprints.
 
 ## Última atualização
 
+**2026-04-30 (tarde — username login)** — Ramon + Claude (Opus 4.7).
+Início da Fase 3 do auth track (auth hardening), parcial e
+retrocompatível:
+
+- **Migration 025** — adiciona `username` em `users` (nullable,
+  unique-via-`lower()` index). Login agora pede username em vez de
+  free-text "Your Name", validado contra `users.username + pin`.
+- **Login.jsx — lookup com 3 fallbacks** (em ordem):
+  1. `username + pin` — caminho ideal, users cadastrados pelo admin.
+  2. `name ilike + pin` — legacy: rows existentes sem username (Brenda).
+  3. `PIN_TO_ROLE` hardcoded — quem ainda não foi cadastrado.
+  Tudo retrocompatível, ninguém é trancado fora.
+- **Admin → Users & Access** ganhou campo **Username (login)**
+  (obrigatório em "Add User", opcional em "Edit"). Validação:
+  `[a-z0-9._]{3,32}`, lowercase forçado, sem espaço. Catch específico
+  pra erro de unique violation (23505) → "That username is already
+  taken". Tabela ganhou coluna **Username**.
+- **Roles do select** ajustados: removido `admin` (regra "admin é
+  hardcoded, nunca em users"); adicionados `receptionist`,
+  `marketing`, `screen` (TV Dashboard) que faltavam.
+
+**Pendência do Ramon antes de testar em prod:**
+- Rodar **migration 025** no Supabase (`migrations/025_user_username.sql`).
+  Sem isso, lookup (1) falha silenciosamente, login cai pra (2)/(3)
+  e o app não quebra — só significa que o feature de username não
+  funciona até a migration estar no banco.
+
 **2026-04-30** — Ramon + Claude (Opus 4.7).
 Sessão focada em finalizar o profile dos usuários antes do cadastro
 real da equipe. Mudanças:
@@ -597,9 +624,11 @@ de fix (regex de várias formas, DOMParser) não resolveram. Plano pra
 amanhã: capturar o `text` exato vindo da Slack API via DevTools e
 considerar sanitização server-side.
 
-**Pendência futura:** Fase 3 (auth hardening) — validar `name + pin`
-juntos no Login.jsx, remover fallback hardcoded `PIN_TO_ROLE`. Adiada
-até Ramon cadastrar todos os usuários reais.
+**Pendência futura:** Fase 3 (auth hardening) — fechado parcialmente
+em 30/04 (ver "tarde — username login"). Falta remover o fallback
+`PIN_TO_ROLE` hardcoded e o lookup (2) por `name ilike + pin`,
+deixando só `username + pin`. Adiar até toda a equipe estar
+cadastrada com username em `users`.
 
 **2026-04-29 (manhã)** — Ramon + Claude (Opus 4.7).
 Logo centralizada em `src/assets/logo.png` (deletadas 5 cópias

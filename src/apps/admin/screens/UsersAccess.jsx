@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Plus, Edit3, X, Eye, EyeOff, Save, Camera, Loader2,
-  Phone as PhoneIcon, MapPin, User as UserIcon,
+  Phone as PhoneIcon, MapPin, User as UserIcon, AtSign,
 } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import { supabase } from '../lib/supabase';
@@ -10,14 +10,21 @@ import Toast from '../components/Toast';
 import { logAudit } from '../../../shared/lib/audit';
 import Avatar, { colorFromName } from '../../../shared/components/ui/Avatar';
 
-const ROLES = ['sales', 'manager', 'operations', 'owner', 'admin'];
+// Admin is intentionally NOT in this list — admin is hardcoded in
+// AdminLogin.jsx and never lives in the `users` table (see CLAUDE.md
+// "Admin é hardcoded"). Marketing + screen stay because they exist as
+// placeholder roles for future Ramon/dashboard accounts.
+const ROLES = ['sales', 'manager', 'operations', 'owner', 'receptionist', 'marketing', 'screen'];
 
 const ROLE_LABEL = {
   sales: 'Sales',
   manager: 'Manager',
   operations: 'Operations',
   owner: 'Owner',
-  admin: 'Admin',
+  receptionist: 'Receptionist',
+  marketing: 'Marketing',
+  screen: 'TV Dashboard',
+  admin: 'Admin', // kept for displaying any pre-existing admin row, not for creation
 };
 
 // Photo upload — same pipeline as UserProfileModal so a fresh user
@@ -31,9 +38,16 @@ const MAX_BYTES = 4 * 1024 * 1024;
 const ACCEPTED_FILE_INPUT =
   '.jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif';
 
+// Login handle: lowercase letters, digits, dot, underscore. No
+// spaces, no uppercase (we lowercase on save). Keeps things simple
+// and predictable — the Login.jsx form does a case-insensitive
+// match against this column.
+const USERNAME_RE = /^[a-z0-9._]{3,32}$/;
+
 function emptyForm() {
   return {
     name: '',
+    username: '',
     role: 'sales',
     pin: '',
     phone: '',
@@ -85,6 +99,7 @@ export default function UsersAccess({ user }) {
     setEditing(u);
     setForm({
       name: u.name || '',
+      username: u.username || '',
       role: u.role || 'sales',
       pin: u.pin || '',
       phone: u.phone || '',
@@ -176,13 +191,29 @@ export default function UsersAccess({ user }) {
   }
 
   async function save() {
-    if (!form.name.trim()) { setToast({ type: 'warning', message: 'Name required' }); return; }
+    if (!form.name.trim()) { setToast({ type: 'warning', message: 'Full Name required' }); return; }
     if (!/^\d{4,6}$/.test(form.pin)) { setToast({ type: 'warning', message: 'PIN must be 4-6 digits' }); return; }
     if (!ROLES.includes(form.role)) { setToast({ type: 'warning', message: 'Pick a valid role' }); return; }
+    // Username — required for new users, optional for legacy edits
+    // (so a row imported before the column existed isn't forced to
+    // backfill on first edit). When provided it must match the regex.
+    const usernameTrimmed = form.username.trim().toLowerCase();
+    if (editing === 'new' && !usernameTrimmed) {
+      setToast({ type: 'warning', message: 'Username required' });
+      return;
+    }
+    if (usernameTrimmed && !USERNAME_RE.test(usernameTrimmed)) {
+      setToast({
+        type: 'warning',
+        message: 'Username: 3-32 chars, lowercase letters/numbers/dot/underscore only',
+      });
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
         name: form.name.trim(),
+        username: usernameTrimmed || null,
         role: form.role,
         pin: form.pin,
         phone: form.phone.trim() || null,
@@ -236,7 +267,16 @@ export default function UsersAccess({ user }) {
       setToast({ type: 'success', message: 'User saved' });
       close();
     } catch (err) {
-      setToast({ type: 'error', message: err.message || 'Failed to save' });
+      // Postgres unique violation on username column comes back as
+      // 23505 / "duplicate key" — surface it in plain English instead
+      // of dumping the SQL message at the user.
+      const isDuplicate = err?.code === '23505'
+        || /duplicate key|already exists|unique/i.test(err?.message || '');
+      if (isDuplicate && /username/i.test(err?.message || '')) {
+        setToast({ type: 'error', message: 'That username is already taken — pick another.' });
+      } else {
+        setToast({ type: 'error', message: err.message || 'Failed to save' });
+      }
     } finally {
       setSaving(false);
     }
@@ -289,6 +329,7 @@ export default function UsersAccess({ user }) {
             <thead className="bg-omega-cloud text-omega-stone uppercase text-xs tracking-wider">
               <tr>
                 <th className="px-4 py-3 text-left">Name</th>
+                <th className="px-4 py-3 text-left">Username</th>
                 <th className="px-4 py-3 text-left">Role</th>
                 <th className="px-4 py-3 text-left">Phone</th>
                 <th className="px-4 py-3 text-left">PIN</th>
@@ -299,7 +340,7 @@ export default function UsersAccess({ user }) {
             <tbody className="divide-y divide-gray-100">
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-omega-stone">
+                  <td colSpan={7} className="px-4 py-10 text-center text-omega-stone">
                     No users yet. The hardcoded PINs (3333, 4444, 1111, 2222, 9999) continue to work until you add users here.
                   </td>
                 </tr>
@@ -317,6 +358,7 @@ export default function UsersAccess({ user }) {
                       <span className="font-medium text-omega-charcoal">{u.name}</span>
                     </div>
                   </td>
+                  <td className="px-4 py-3 text-omega-stone font-mono text-xs">{u.username || '—'}</td>
                   <td className="px-4 py-3">{ROLE_LABEL[u.role] || u.role}</td>
                   <td className="px-4 py-3 text-omega-stone">{u.phone || '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs">{maskPin(u.pin)}</td>
@@ -394,6 +436,31 @@ export default function UsersAccess({ user }) {
                   placeholder="e.g. Inácio Silva"
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
                 />
+                <p className="text-[10px] text-omega-stone mt-1">
+                  Shown next to the avatar in sidebars and chat.
+                </p>
+              </Field>
+
+              <Field label="Username (login)" icon={AtSign}>
+                <input
+                  value={form.username}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      // Strip everything we don't allow as the user types so the
+                      // hint "lowercase, no spaces" never gets violated silently.
+                      username: e.target.value.toLowerCase().replace(/[^a-z0-9._]/g, ''),
+                    })
+                  }
+                  placeholder="e.g. inacio"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-mono"
+                />
+                <p className="text-[10px] text-omega-stone mt-1">
+                  Used to log in (with PIN). Lowercase, 3-32 characters, letters/numbers/dot/underscore.
+                </p>
               </Field>
 
               <Field label="Role">

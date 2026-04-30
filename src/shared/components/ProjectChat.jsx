@@ -709,6 +709,15 @@ function MessageList({ messages }) {
   // requested). "Yes" pops a new tab; "No" cancels.
   const [pendingLink, setPendingLink] = useState(null);
 
+  // Render newest-first: most recent message at the top of the tab.
+  // The backend (api/slack/get-messages.js) hands us oldest-first
+  // (chat-style), so we reverse here for display. The date separator
+  // logic below still works in either direction — it only checks
+  // "is the previous rendered message on a different calendar day"
+  // — so an "Hoje" / "Yesterday" / "April 17th" pill still appears
+  // exactly once at the start of each day's group.
+  const displayed = useMemo(() => [...messages].reverse(), [messages]);
+
   function handleBodyClick(e) {
     const a = e.target.closest('a[href]');
     if (!a) return;
@@ -721,8 +730,8 @@ function MessageList({ messages }) {
   return (
     <>
       <ul onClick={handleBodyClick}>
-        {messages.map((m, idx) => {
-          const prev = idx > 0 ? messages[idx - 1] : null;
+        {displayed.map((m, idx) => {
+          const prev = idx > 0 ? displayed[idx - 1] : null;
           const showDate = !prev || !sameDayCT(m.ts, prev.ts);
           const showBorder = !showDate && idx > 0;
           return (

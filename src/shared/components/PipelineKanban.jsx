@@ -44,6 +44,30 @@ export const PIPELINE_COLUMNS = PIPELINE_ORDER.map((id) => ({
 
 const COLUMN_BY_ID = Object.fromEntries(PIPELINE_COLUMNS.map((c) => [c.id, c]));
 
+// Re-sort the jobs array using the same precedence the Supabase query
+// uses on first load: pipeline_position ASC NULLS LAST, then
+// created_at DESC. We need this on the client too because handleDragEnd
+// edits a single job in place — without re-sorting the array, the
+// updated pipeline_position has no visual effect (the kanban renders
+// jobs in array order, bucketized by column, and never re-sorts on its
+// own).
+function sortJobsForKanban(arr) {
+  return [...arr].sort((a, b) => {
+    const pa = Number(a?.pipeline_position);
+    const pb = Number(b?.pipeline_position);
+    const aHas = Number.isFinite(pa);
+    const bHas = Number.isFinite(pb);
+    if (aHas && bHas) return pa - pb;
+    if (aHas) return -1;          // a positioned, b NULL → a first (NULLS LAST)
+    if (bHas) return 1;
+    // Both NULL — fall back to created_at DESC (newest first), matching
+    // the legacy behavior pre-migration 028.
+    const ta = new Date(a?.created_at || 0).getTime();
+    const tb = new Date(b?.created_at || 0).getTime();
+    return tb - ta;
+  });
+}
+
 // Compact USD formatter for column totals — always shows the $ sign and
 // uses K/M abbreviations once we cross thresholds so the header stays
 // quiet ("$1.2M" reads better than "$1,234,567" in a narrow column).
@@ -338,7 +362,11 @@ export default function PipelineKanban({
         throw jobsResp.error;
       }
 
-      setJobs(jobsData || []);
+      // Always sort client-side too. In legacy mode (migration 028
+      // missing) Supabase ordered only by created_at, so any rows that
+      // happened to already have a pipeline_position get bucketed
+      // correctly here.
+      setJobs(sortJobsForKanban(jobsData || []));
       setEstimates(e || []);
       setSubs(s || []);
       setAssignments(a || []);
@@ -506,10 +534,15 @@ export default function PipelineKanban({
     if (previous === targetCol && Number(job.pipeline_position) === newPosition) return;
 
     setSavingId(activeJobId);
+    // Optimistic update + RE-SORT — without the sort, the array stays
+    // in the same order even though the moved card has a new
+    // pipeline_position, so the kanban renders the card in its OLD
+    // visual slot. The sort uses the same precedence as the Supabase
+    // load query (position ASC NULLS LAST, created_at DESC).
     setJobs((prev) =>
-      prev.map((j) => (j.id === activeJobId
+      sortJobsForKanban(prev.map((j) => (j.id === activeJobId
         ? { ...j, pipeline_status: targetCol, pipeline_position: newPosition }
-        : j))
+        : j)))
     );
 
     const fullPatch = { pipeline_status: targetCol, pipeline_position: newPosition };
@@ -521,8 +554,8 @@ export default function PipelineKanban({
 
     // If we tried to write pipeline_position but the migration is
     // missing, retry without it so the column-move still persists.
-    // From there on the kanban operates in legacy mode (no in-column
-    // reorder) until the migration ships.
+    // From there on the kanban operates in legacy mode until the
+    // migration ships.
     if (error && /pipeline_position/.test(error.message || '')) {
       setPositionMigrationMissing(true);
       const retry = await supabase.from('jobs').update(legacyPatch).eq('id', activeJobId);
@@ -532,13 +565,26 @@ export default function PipelineKanban({
 
     if (error) {
       setJobs((prev) =>
-        prev.map((j) => (j.id === activeJobId
+        sortJobsForKanban(prev.map((j) => (j.id === activeJobId
           ? { ...j, pipeline_status: previous, pipeline_position: job.pipeline_position }
-          : j))
+          : j)))
       );
       setToast({ type: 'error', message: `Failed to move job: ${error.message}` });
       return;
     }
+
+    // Heads-up when reorder won't survive a refresh because the
+    // migration hasn't been applied. Suppressed for cross-column moves
+    // (those persist via pipeline_status). Only fired once per drop so
+    // it doesn't get spammy.
+    if (previous === targetCol && positionMigrationMissing) {
+      setToast({
+        type: 'error',
+        message: 'In-column reorder needs migration 028 to persist. Run migrations/028_pipeline_position.sql.',
+      });
+      return;
+    }
+
     if (previous !== targetCol) {
       // Only audit cross-column moves — silent reorder within a column
       // would just spam the audit log without adding signal.

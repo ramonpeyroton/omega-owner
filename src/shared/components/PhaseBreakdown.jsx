@@ -1,5 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { ChevronDown, ChevronRight, CheckCircle2, Circle, MessageSquare, MessageCircle, Phone, ThumbsUp, ThumbsDown, AlertTriangle } from 'lucide-react';
+import {
+  ChevronDown, ChevronRight, CheckCircle2, Circle,
+  MessageSquare, MessageCircle, Phone, ThumbsUp, ThumbsDown, AlertTriangle,
+  Pencil, Trash2, Plus, Check,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { templateFor, progressFromPhaseData, normalizeService } from '../config/phaseBreakdown';
 import PhasePhotos from './PhasePhotos';
@@ -12,6 +16,10 @@ import { logAudit } from '../lib/audit';
 const CAN_CONTACT_SUBS = new Set(['manager', 'owner', 'operations', 'admin']);
 // Same roles can mark item verification status (Pass/Fail/Fix).
 const CAN_VERIFY = CAN_CONTACT_SUBS;
+// Roles allowed to edit the phase breakdown structure (rename phases,
+// add/remove items, add/remove phases). Everyone else sees the same
+// list read-only and can still toggle done/undone.
+const CAN_EDIT_PHASES = new Set(['sales', 'operations', 'owner', 'admin']);
 
 /**
  * Phase breakdown with checkboxes. Persists `phase_data` JSONB on `jobs`.
@@ -29,8 +37,15 @@ export default function PhaseBreakdown({ job, onJobUpdated, user }) {
   // Grouped client-side: { [phaseName]: [{sub_name, sub_phone, id}, ...] }.
   const [subsByPhase, setSubsByPhase] = useState({});
   const canContact = CAN_CONTACT_SUBS.has(user?.role);
+  const canEdit = CAN_EDIT_PHASES.has(user?.role);
   const [pickerFor, setPickerFor] = useState(null); // {phase, assignments} or null
   const [contactFor, setContactFor] = useState(null); // {sub, phase, channel} or null
+
+  // Edit mode toggle — only meaningful for roles in CAN_EDIT_PHASES.
+  // When on: phase names become inputs, items get delete + edit affordances,
+  // and "+ Add item" / "+ Add phase" buttons appear. Checkbox toggling stays
+  // on so a user can mark progress mid-edit if they want.
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     if (!canContact || !job?.id) return;
@@ -168,6 +183,99 @@ export default function PhaseBreakdown({ job, onJobUpdated, user }) {
     });
   }
 
+  // ─── Structural edits (rename / add / remove) ────────────────────
+  // All of these mutate `phaseData`, optimistically update local state,
+  // and schedule a debounced save. IDs use Date.now() because phase_data
+  // is JSONB and we just need uniqueness within the document.
+
+  function renamePhase(phaseIdx, name) {
+    setPhaseData((prev) => {
+      const phases = prev.phases.map((p, pi) => pi === phaseIdx ? { ...p, name } : p);
+      const next = { ...prev, phases };
+      scheduleSave(next);
+      return next;
+    });
+  }
+
+  function addPhase() {
+    const id = `phase_${Date.now()}`;
+    setPhaseData((prev) => {
+      const next = {
+        ...prev,
+        phases: [
+          ...prev.phases,
+          { id, name: 'New Phase', completed: false, items: [] },
+        ],
+      };
+      scheduleSave(next);
+      return next;
+    });
+    setOpenIds((prev) => new Set([...prev, id]));
+    logAudit({
+      user, action: 'phase.add', entityType: 'job', entityId: job.id,
+      details: { phaseId: id },
+    });
+  }
+
+  function removePhase(phaseIdx) {
+    const phase = phaseData.phases[phaseIdx];
+    if (!phase) return;
+    if (!window.confirm(`Delete phase "${phase.name}" and all its items?`)) return;
+    setPhaseData((prev) => {
+      const next = { ...prev, phases: prev.phases.filter((_, i) => i !== phaseIdx) };
+      scheduleSave(next);
+      return next;
+    });
+    logAudit({
+      user, action: 'phase.remove', entityType: 'job', entityId: job.id,
+      details: { phaseId: phase.id, name: phase.name },
+    });
+  }
+
+  function renameItem(phaseIdx, itemIdx, label) {
+    setPhaseData((prev) => {
+      const phases = prev.phases.map((p, pi) => {
+        if (pi !== phaseIdx) return p;
+        const items = p.items.map((it, ii) => ii === itemIdx ? { ...it, label } : it);
+        return { ...p, items };
+      });
+      const next = { ...prev, phases };
+      scheduleSave(next);
+      return next;
+    });
+  }
+
+  function addItem(phaseIdx) {
+    setPhaseData((prev) => {
+      const phases = prev.phases.map((p, pi) => {
+        if (pi !== phaseIdx) return p;
+        const id = `${p.id}_item_${Date.now()}`;
+        return {
+          ...p,
+          items: [...p.items, { id, label: 'New item', done: false }],
+          completed: false,
+        };
+      });
+      const next = { ...prev, phases };
+      scheduleSave(next);
+      return next;
+    });
+  }
+
+  function removeItem(phaseIdx, itemIdx) {
+    setPhaseData((prev) => {
+      const phases = prev.phases.map((p, pi) => {
+        if (pi !== phaseIdx) return p;
+        const items = p.items.filter((_, j) => j !== itemIdx);
+        const completed = items.length > 0 && items.every((it) => it.done);
+        return { ...p, items, completed };
+      });
+      const next = { ...prev, phases };
+      scheduleSave(next);
+      return next;
+    });
+  }
+
   function toggleOpen(id) {
     setOpenIds((prev) => {
       const next = new Set(prev);
@@ -178,7 +286,11 @@ export default function PhaseBreakdown({ job, onJobUpdated, user }) {
 
   const { totalDone, totalItems, progress, currentPhaseName } = progressFromPhaseData(phaseData);
 
-  if (!template && !phaseData.phases.length) {
+  // Empty state — only when there's no template AND no phase_data AND
+  // the current user can't edit (so there's nothing to do here). When
+  // they CAN edit, drop them straight into edit mode with an "Add phase"
+  // affordance so they can build the breakdown from scratch.
+  if (!template && !phaseData.phases.length && !canEdit) {
     return (
       <div className="text-sm text-omega-stone p-4 bg-omega-cloud rounded-lg">
         No phase breakdown template for service "{job.service || '—'}".
@@ -188,20 +300,38 @@ export default function PhaseBreakdown({ job, onJobUpdated, user }) {
 
   return (
     <div className="space-y-3">
-      {/* Summary */}
-      <div className="flex items-center justify-between text-xs">
-        <div>
+      {/* Summary + Edit toggle */}
+      <div className="flex items-center justify-between text-xs gap-3">
+        <div className="min-w-0">
           <p className="text-omega-stone uppercase font-semibold">Progress</p>
           <p className="font-semibold text-omega-charcoal">{totalDone}/{totalItems} items · {currentPhaseName || '—'}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <div className="w-32 h-1.5 rounded-full bg-gray-200 overflow-hidden">
             <div className="h-full bg-[#D4AF37] transition-all" style={{ width: `${progress}%` }} />
           </div>
           <span className="font-semibold text-omega-charcoal text-xs w-8 text-right">{progress}%</span>
+          {canEdit && (
+            <button
+              onClick={() => setEditing((v) => !v)}
+              className={`ml-2 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold uppercase tracking-wider transition ${
+                editing
+                  ? 'bg-omega-charcoal text-white border-omega-charcoal'
+                  : 'border-gray-300 text-omega-stone hover:border-omega-orange hover:text-omega-orange'
+              }`}
+              title={editing ? 'Finish editing' : 'Edit phases & items'}
+            >
+              {editing ? <><Check className="w-3 h-3" /> Done</> : <><Pencil className="w-3 h-3" /> Edit</>}
+            </button>
+          )}
         </div>
       </div>
       {saving && <p className="text-[11px] text-omega-stone">Saving…</p>}
+      {editing && phaseData.phases.length === 0 && (
+        <div className="text-xs text-omega-stone bg-omega-cloud rounded-lg p-3">
+          No phases yet. Use <strong>Add phase</strong> below to start.
+        </div>
+      )}
 
       {/* Phases */}
       <div className="space-y-2">
@@ -216,23 +346,47 @@ export default function PhaseBreakdown({ job, onJobUpdated, user }) {
               <div className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-omega-cloud transition-colors">
                 <button
                   onClick={() => toggleOpen(ph.id)}
-                  className="flex-1 flex items-center gap-2 text-left min-w-0"
+                  className="flex items-center gap-2 text-left flex-shrink-0"
+                  aria-label={open ? 'Collapse phase' : 'Expand phase'}
                 >
                   {open ? <ChevronDown className="w-4 h-4 text-omega-stone" /> : <ChevronRight className="w-4 h-4 text-omega-stone" />}
                   {done
                     ? <CheckCircle2 className="w-4 h-4 text-omega-success" />
                     : <Circle className="w-4 h-4 text-omega-stone" />
                   }
-                  <p className="flex-1 text-sm font-semibold text-omega-charcoal truncate">{ph.name}</p>
-                  <span className="text-[11px] text-omega-stone">{doneCount}/{ph.items.length}</span>
                 </button>
-                {canContact && assignments.length > 0 && (
+                {editing ? (
+                  <input
+                    value={ph.name}
+                    onChange={(e) => renamePhase(phaseIdx, e.target.value)}
+                    placeholder="Phase name"
+                    className="flex-1 min-w-0 px-2 py-1 rounded border border-gray-200 text-sm font-semibold text-omega-charcoal focus:border-omega-orange focus:outline-none"
+                  />
+                ) : (
+                  <button
+                    onClick={() => toggleOpen(ph.id)}
+                    className="flex-1 text-left min-w-0"
+                  >
+                    <p className="text-sm font-semibold text-omega-charcoal truncate">{ph.name}</p>
+                  </button>
+                )}
+                <span className="text-[11px] text-omega-stone flex-shrink-0">{doneCount}/{ph.items.length}</span>
+                {!editing && canContact && assignments.length > 0 && (
                   <button
                     onClick={(e) => { e.stopPropagation(); setPickerFor({ phase: ph, assignments }); }}
                     className="ml-1 inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-omega-orange/40 text-omega-orange hover:bg-omega-pale text-[11px] font-bold"
                     title={`Contact ${assignments.length} sub${assignments.length > 1 ? 's' : ''}`}
                   >
                     <Phone className="w-3 h-3" /> {assignments.length}
+                  </button>
+                )}
+                {editing && (
+                  <button
+                    onClick={() => removePhase(phaseIdx)}
+                    className="ml-1 p-1.5 rounded-lg text-omega-stone hover:bg-red-50 hover:text-red-600 transition"
+                    title="Delete this phase"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
@@ -243,32 +397,72 @@ export default function PhaseBreakdown({ job, onJobUpdated, user }) {
                     <div key={it.id} className="flex items-start gap-2 py-1 group">
                       <button
                         onClick={() => toggleItem(phaseIdx, itemIdx)}
-                        className="flex items-start gap-2 text-left flex-1 min-w-0"
+                        className="flex items-start gap-2 text-left flex-shrink-0 mt-0.5"
+                        aria-label={it.done ? 'Mark undone' : 'Mark done'}
                       >
-                        <span className={`w-4 h-4 mt-0.5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                        <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
                           it.done ? 'bg-omega-success border-omega-success' : 'bg-white border-gray-300 group-hover:border-omega-orange'
                         }`}>
                           {it.done && <CheckCircle2 className="w-3 h-3 text-white" />}
                         </span>
-                        <span className={`text-xs ${it.done ? 'line-through text-omega-stone' : 'text-omega-charcoal'}`}>{it.label}</span>
-                        {it.verify_status && (
-                          <VerifyBadge status={it.verify_status} />
-                        )}
                       </button>
-                      {canContact && (
+                      {editing ? (
+                        <input
+                          value={it.label}
+                          onChange={(e) => renameItem(phaseIdx, itemIdx, e.target.value)}
+                          placeholder="Item label"
+                          className="flex-1 min-w-0 px-2 py-1 rounded border border-gray-200 text-xs text-omega-charcoal focus:border-omega-orange focus:outline-none"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => toggleItem(phaseIdx, itemIdx)}
+                          className="flex-1 text-left min-w-0"
+                        >
+                          <span className={`text-xs ${it.done ? 'line-through text-omega-stone' : 'text-omega-charcoal'}`}>
+                            {it.label}
+                          </span>
+                          {it.verify_status && <VerifyBadge status={it.verify_status} />}
+                        </button>
+                      )}
+                      {!editing && canContact && (
                         <VerifyControls
                           current={it.verify_status}
                           onSet={(s) => setVerify(phaseIdx, itemIdx, s)}
                         />
                       )}
-                      <PhasePhotos jobId={job.id} phaseId={ph.id} itemId={it.id} user={user} />
+                      {!editing && <PhasePhotos jobId={job.id} phaseId={ph.id} itemId={it.id} user={user} />}
+                      {editing && (
+                        <button
+                          onClick={() => removeItem(phaseIdx, itemIdx)}
+                          className="p-1 rounded text-omega-stone hover:bg-red-50 hover:text-red-600 transition flex-shrink-0"
+                          title="Delete this item"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   ))}
+                  {editing && (
+                    <button
+                      onClick={() => addItem(phaseIdx)}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs font-semibold text-omega-orange hover:bg-omega-pale transition mt-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add item
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
+        {editing && (
+          <button
+            onClick={addPhase}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border-2 border-dashed border-gray-300 text-sm font-semibold text-omega-stone hover:border-omega-orange hover:text-omega-orange transition"
+          >
+            <Plus className="w-4 h-4" /> Add phase
+          </button>
+        )}
       </div>
 
       {/* Picker: which sub + SMS/WhatsApp ─────────────────────── */}

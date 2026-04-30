@@ -477,6 +477,49 @@ export const PHASE_TEMPLATES = {
       'Project sign-off',
     ]),
   ],
+  flooring: [
+    p('prep', 'Pre-Installation Prep', [
+      'Site walk-through with client',
+      'Furniture moved / floor protection',
+      'Existing flooring removed',
+      'Subfloor inspected',
+      'Subfloor cleaned',
+      'Subfloor leveled (if needed)',
+      'Moisture readings taken',
+      'Material delivered',
+      'Material acclimation (48–72h)',
+    ]),
+    p('underlayment', 'Underlayment & Vapor Barrier', [
+      'Vapor barrier installed (if concrete)',
+      'Underlayment installed',
+      'Seams sealed / taped',
+      'Transitions planned',
+    ]),
+    p('install', 'Flooring Installation', [
+      'Layout planned (start wall, expansion gaps)',
+      'First row alignment verified',
+      'Boards / planks / tiles cut and fitted',
+      'Pattern checked (no repeats in adjacent rows)',
+      'Adhesive / fastening per spec',
+      'Expansion gaps maintained at perimeter',
+      'End / edge boards cut to fit',
+      'Doorway transitions installed',
+    ]),
+    p('trim', 'Trim & Finishing', [
+      'Baseboards reinstalled or new ones installed',
+      'Quarter-round / shoe molding installed',
+      'Caulking / gap fill',
+      'Threshold strips at room transitions',
+    ]),
+    p('final', 'Final Inspection & Cleanup', [
+      'Surface fully cleaned',
+      'Walk-through with client',
+      'Punch list items addressed',
+      'Leftover material handed to client / disposed',
+      'Care instructions delivered',
+      'Final sign-off',
+    ]),
+  ],
 };
 
 export const SERVICE_LABELS = {
@@ -486,6 +529,7 @@ export const SERVICE_LABELS = {
   addition: 'Addition',
   basement: 'Basement',
   driveway: 'Driveway',
+  flooring: 'Flooring',
 };
 
 // Normalize a free-form service string to a template key.
@@ -498,6 +542,7 @@ export function normalizeService(service) {
   if (s.includes('addition')) return 'addition';
   if (s.includes('basement')) return 'basement';
   if (s.includes('driveway') || s.includes('paver')) return 'driveway';
+  if (s.includes('floor')) return 'flooring';
   return null;
 }
 

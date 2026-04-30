@@ -15,20 +15,11 @@ import {
   needsLineQuestion,
 } from './cabinetCatalog';
 
-export const SERVICES = [
-  { id: 'bathroom',        label: 'Bathroom Renovation', icon: 'Droplets' },
-  { id: 'kitchen',         label: 'Kitchen Renovation',  icon: 'ChefHat' },
-  { id: 'deck',            label: 'Deck / Patio',        icon: 'TreePine' },
-  { id: 'addition',        label: 'Home Addition',       icon: 'Home' },
-  { id: 'roofing',         label: 'Roofing',             icon: 'Triangle' },
-  { id: 'driveway',        label: 'Driveway',            icon: 'Car' },
-  { id: 'basement',        label: 'Basement Finishing',  icon: 'Layers' },
-  { id: 'flooring',        label: 'Flooring',            icon: 'Grid3x3' },
-  { id: 'survey',          label: 'Survey',              icon: 'Ruler' },
-  { id: 'building_plans',  label: 'Building Plans',      icon: 'DraftingCompass' },
-  { id: 'fullreno',        label: 'Full Renovation',     icon: 'Building2' },
-  { id: 'newconstruction', label: 'New Construction',    icon: 'Building' },
-];
+// Canonical service list lives in shared/ so JobFullView and other
+// shared components can use it without reaching into apps/sales/.
+// Re-exported here so existing `import { SERVICES } from '../data/questionnaire'`
+// calls keep working.
+export { SERVICES } from '../../../shared/data/services';
 
 // ─── Question type reference ────────────────────────────────────────
 // { id, type, label, helper?, options?, unit?, placeholder?, showIf?,

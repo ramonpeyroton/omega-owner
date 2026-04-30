@@ -24,6 +24,7 @@ import JobCoverPhotoUpload from './JobCoverPhotoUpload';
 import { logAudit } from '../lib/audit';
 import { PIPELINE_STEP_LABEL, PIPELINE_COLORS } from '../config/phaseBreakdown';
 import { formatPhoneInput, toE164 } from '../lib/phone';
+import { SERVICES, parseJobServices, joinJobServices } from '../data/services';
 
 // Roles allowed to see the Financials tab (Cost Projection + Job Costing + Actual Costs).
 // Internal money only — sellers don't see margin/cost data.
@@ -59,12 +60,24 @@ const EDITABLE_FIELDS = [
   { key: 'client_phone', label: 'Phone', type: 'phone' },
   { key: 'client_email', label: 'Email', type: 'email' },
   { key: 'address',      label: 'Address', type: 'textarea' },
-  { key: 'service',      label: 'Service Type' },
+  // `service` renders as multi-select chips so the seller can change
+  // "deck" to "flooring" (or pick more than one) after the lead was
+  // created. Persisted back to the same comma-separated string we've
+  // always used.
+  { key: 'service',      label: 'Services',     type: 'services' },
 ];
 
 function pickEditable(j) {
   const obj = {};
-  EDITABLE_FIELDS.forEach((f) => { obj[f.key] = j?.[f.key] || ''; });
+  EDITABLE_FIELDS.forEach((f) => {
+    if (f.type === 'services') {
+      // Edit mode keeps `service` as an array of ids; saveEdits joins
+      // it back to the canonical comma-separated string for storage.
+      obj[f.key] = parseJobServices(j?.[f.key]);
+    } else {
+      obj[f.key] = j?.[f.key] || '';
+    }
+  });
   return obj;
 }
 
@@ -140,6 +153,13 @@ export default function JobFullView({
     try {
       const patch = Object.fromEntries(
         Object.entries(form).map(([k, v]) => {
+          // The Services chip editor stores an array in form state; we
+          // collapse it back to the comma-separated string the rest of
+          // the app expects. An empty selection becomes null.
+          if (k === 'service' && Array.isArray(v)) {
+            const joined = joinJobServices(v);
+            return [k, joined || null];
+          }
           if (v === '') return [k, null];
           // Persist phone in E.164 so Twilio accepts it without retries.
           if (k === 'client_phone' && v) return [k, toE164(v) || v];
@@ -325,7 +345,9 @@ export default function JobFullView({
               {job.client_name || job.name || 'Untitled'}
             </h1>
           </div>
-          {/* Quick actions (desktop) */}
+          {/* Quick actions (desktop). Estimate Flow used to live here too,
+              but it now lives inside the Estimate tab so the seller has
+              one obvious place for everything related to the estimate. */}
           <div className="hidden sm:flex items-center gap-2">
             {onOpenQuestionnaire && (
               <button
@@ -335,12 +357,6 @@ export default function JobFullView({
                 <ClipboardEdit className="w-3.5 h-3.5" /> Questionnaire
               </button>
             )}
-            <button
-              onClick={() => { onOpenEstimateFlow?.(job); onClose?.(); }}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-xs font-semibold"
-            >
-              Estimate Flow <ArrowRight className="w-3.5 h-3.5" />
-            </button>
           </div>
         </div>
 
@@ -480,6 +496,30 @@ export default function JobFullView({
 
           {tab === 'estimate' && canSeeEstimate && (
             <div className="space-y-5">
+              {/* Open Estimate Flow — standalone wizard for sending to
+                  the client + generating contract + invoicing. Used to
+                  live in the top header bar; moved here so anything
+                  estimate-related has one home. The button is hidden
+                  if the host app didn't pass an onOpenEstimateFlow
+                  callback (e.g. read-only views). */}
+              {onOpenEstimateFlow && (
+                <button
+                  onClick={() => { onOpenEstimateFlow(job); onClose?.(); }}
+                  className="w-full inline-flex items-center justify-between gap-3 p-4 rounded-xl bg-omega-orange hover:bg-omega-dark text-white shadow-card transition-colors"
+                >
+                  <span className="flex items-center gap-3">
+                    <Receipt className="w-5 h-5" />
+                    <span className="text-left">
+                      <span className="block text-sm font-bold">Open Estimate Flow</span>
+                      <span className="block text-[11px] text-white/80 font-medium">
+                        Review · Payment plan · Contract · Invoice
+                      </span>
+                    </span>
+                  </span>
+                  <ArrowRight className="w-5 h-5 flex-shrink-0" />
+                </button>
+              )}
+
               {/* Cost Projection — internal reference, hidden from sellers
                   (cost/margin data stays in Finance roles only). */}
               {canSeeFinancials && (
@@ -724,25 +764,33 @@ function DetailsTab({
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {EDITABLE_FIELDS.map((f) => (
-              <div key={f.key} className={f.type === 'textarea' ? 'sm:col-span-2' : ''}>
-                <label className="text-[10px] font-semibold text-omega-stone uppercase tracking-wider">{f.label}</label>
-                {f.type === 'textarea' ? (
-                  <textarea value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
-                ) : f.type === 'phone' ? (
-                  <input
-                    type="tel"
-                    inputMode="tel"
-                    value={form[f.key] || ''}
-                    onChange={(e) => setForm({ ...form, [f.key]: formatPhoneInput(e.target.value) })}
-                    placeholder="(203) 555-1234"
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
-                  />
-                ) : (
-                  <input type={f.type || 'text'} value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
-                )}
-              </div>
-            ))}
+            {EDITABLE_FIELDS.map((f) => {
+              const colSpan = (f.type === 'textarea' || f.type === 'services') ? 'sm:col-span-2' : '';
+              return (
+                <div key={f.key} className={colSpan}>
+                  <label className="text-[10px] font-semibold text-omega-stone uppercase tracking-wider">{f.label}</label>
+                  {f.type === 'textarea' ? (
+                    <textarea value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                  ) : f.type === 'phone' ? (
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={form[f.key] || ''}
+                      onChange={(e) => setForm({ ...form, [f.key]: formatPhoneInput(e.target.value) })}
+                      placeholder="(203) 555-1234"
+                      className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm"
+                    />
+                  ) : f.type === 'services' ? (
+                    <ServicePicker
+                      value={Array.isArray(form[f.key]) ? form[f.key] : []}
+                      onChange={(next) => setForm({ ...form, [f.key]: next })}
+                    />
+                  ) : (
+                    <input type={f.type || 'text'} value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 text-sm" />
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -766,13 +814,9 @@ function DetailsTab({
         />
       </div>
 
-      {/* Primary CTA */}
-      <button
-        onClick={onOpenEstimateFlow}
-        className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold"
-      >
-        View Estimate Flow <ArrowRight className="w-4 h-4" />
-      </button>
+      {/* Note: the "View Estimate Flow" CTA used to live here. It's been
+          consolidated into the Estimate tab so all estimate-related
+          actions stay grouped. */}
 
       {/* Start a new job for this same client. Visible only when the
           host app passed `onStartNewJobForClient` (currently the Sales
@@ -837,6 +881,43 @@ function Field({ icon: Icon, label, value, colSpan = 1 }) {
         {Icon && <Icon className="w-3 h-3" />} {label}
       </p>
       <p className="text-sm font-medium text-omega-charcoal mt-0.5 break-words">{value || '—'}</p>
+    </div>
+  );
+}
+
+// Multi-toggle chip picker for services. Click to add, click again to
+// remove. Persists as the canonical comma-separated string via the
+// parent's saveEdits handler.
+function ServicePicker({ value, onChange }) {
+  const selected = new Set(value || []);
+  function toggle(id) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    // Preserve insertion order across the canonical SERVICES list
+    // — keeps "deck, kitchen" stable instead of jumping around as
+    // the user toggles chips.
+    onChange(SERVICES.filter((s) => next.has(s.id)).map((s) => s.id));
+  }
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5">
+      {SERVICES.map((s) => {
+        const isOn = selected.has(s.id);
+        return (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => toggle(s.id)}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+              isOn
+                ? 'bg-omega-orange border-omega-orange text-white'
+                : 'bg-white border-gray-200 text-omega-slate hover:border-omega-orange'
+            }`}
+          >
+            {s.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

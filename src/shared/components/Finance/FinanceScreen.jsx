@@ -122,6 +122,9 @@ function CompanyTab() {
   const [loading, setLoading] = useState(true);
   const [totals, setTotals] = useState(null);
   const [qb, setQb] = useState({ status: 'loading' });
+  const [pnl, setPnl] = useState(null);
+  const [overdueInvoices, setOverdueInvoices] = useState([]);
+  const [billsDue, setBillsDue] = useState([]);
   // QB connect/disconnect feedback (set from URL query after callback).
   const [qbToast, setQbToast] = useState(null);
 
@@ -136,6 +139,19 @@ function CompanyTab() {
         if (!cancelled) {
           setTotals(t);
           setQb(qbRes);
+        }
+        // Load extras only if connected — they all need the same token.
+        if (!cancelled && qbRes.status === 'connected') {
+          const [pnlData, invs, bills] = await Promise.all([
+            fetchJson('/api/quickbooks/pnl'),
+            fetchJson('/api/quickbooks/overdue-invoices'),
+            fetchJson('/api/quickbooks/bills-due'),
+          ]);
+          if (!cancelled) {
+            if (pnlData?.connected) setPnl(pnlData);
+            if (invs?.connected)    setOverdueInvoices(invs.invoices || []);
+            if (bills?.connected)   setBillsDue(bills.bills || []);
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -164,7 +180,16 @@ function CompanyTab() {
 
   async function reloadBalances() {
     setQb({ status: 'loading' });
-    setQb(await loadQbBalances());
+    const [qbRes, pnlData, invs, bills] = await Promise.all([
+      loadQbBalances(),
+      fetchJson('/api/quickbooks/pnl'),
+      fetchJson('/api/quickbooks/overdue-invoices'),
+      fetchJson('/api/quickbooks/bills-due'),
+    ]);
+    setQb(qbRes);
+    setPnl(pnlData?.connected ? pnlData : null);
+    setOverdueInvoices(invs?.connected ? (invs.invoices || []) : []);
+    setBillsDue(bills?.connected ? (bills.bills || []) : []);
   }
 
   async function handleDisconnect() {
@@ -258,22 +283,12 @@ function CompanyTab() {
         </div>
 
         {qb.status === 'connected' && qb.accounts?.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {qb.accounts.map((a) => (
-              <div key={a.id} className="rounded-xl border border-gray-200 p-4">
-                <p className="text-[10px] uppercase tracking-wider text-omega-stone font-semibold">{a.type}{a.subType ? ` · ${a.subType}` : ''}</p>
-                <p className="font-bold text-omega-charcoal text-sm mt-1">{a.name}</p>
-                <p className={`text-xl font-bold mt-2 ${a.currentBalance < 0 ? 'text-red-600' : 'text-omega-charcoal'}`}>
-                  {money(a.currentBalance)} <span className="text-[10px] font-normal text-omega-stone">{a.currency}</span>
-                </p>
-              </div>
-            ))}
-          </div>
+          <QbAccountsBreakdown accounts={qb.accounts} />
         )}
 
         {qb.status === 'connected' && qb.accounts?.length === 0 && (
           <div className="rounded-xl bg-omega-cloud border border-dashed border-gray-300 p-4 text-sm text-omega-stone">
-            Conectado, mas nenhuma conta bancária ou cartão de crédito ativa encontrada no QuickBooks.
+            Conectado, mas nenhuma conta encontrada no QuickBooks.
           </div>
         )}
 
@@ -289,6 +304,194 @@ function CompanyTab() {
           </div>
         )}
       </div>
+
+      {/* P&L cards — only when connected */}
+      {qb.status === 'connected' && pnl && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <PnlCard label="P&L do mês"  data={pnl.month} />
+          <PnlCard label="P&L no ano"  data={pnl.ytd} />
+        </div>
+      )}
+
+      {/* Overdue invoices */}
+      {qb.status === 'connected' && overdueInvoices.length > 0 && (
+        <OverdueList
+          title="Invoices vencidas"
+          icon={ArrowDownCircle}
+          tone="red"
+          items={overdueInvoices.map((i) => ({
+            id: i.id,
+            primary: i.customer,
+            secondary: `Invoice #${i.docNumber || i.id} · venceu em ${new Date(i.dueDate).toLocaleDateString()} (${i.daysPastDue}d atrás)`,
+            amount: i.balance,
+            badge: `${i.daysPastDue}d`,
+          }))}
+          totalLabel="Total a receber"
+          totalAmount={overdueInvoices.reduce((s, i) => s + i.balance, 0)}
+        />
+      )}
+
+      {/* Bills due */}
+      {qb.status === 'connected' && billsDue.length > 0 && (
+        <OverdueList
+          title="Bills a pagar"
+          icon={ArrowUpCircle}
+          tone="orange"
+          items={billsDue.map((b) => ({
+            id: b.id,
+            primary: b.vendor,
+            secondary: `Bill #${b.docNumber || b.id} · ${b.dueDate ? `venc. ${new Date(b.dueDate).toLocaleDateString()}` : 'sem due date'}${b.daysPastDue > 0 ? ` (${b.daysPastDue}d atrás)` : ''}`,
+            amount: b.balance,
+            badge: b.daysPastDue > 0 ? `${b.daysPastDue}d` : null,
+          }))}
+          totalLabel="Total a pagar"
+          totalAmount={billsDue.reduce((s, b) => s + b.balance, 0)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Helper used by the Company tab loader. Returns parsed JSON or null.
+async function fetchJson(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+// Group QB accounts by type and render each category as its own block.
+// Computes a "patrimônio líquido aproximado" up top from the assets vs
+// liabilities split.
+function QbAccountsBreakdown({ accounts }) {
+  const groups = {};
+  for (const a of accounts) (groups[a.type] = groups[a.type] || []).push(a);
+
+  // Net worth approx: assets - liabilities. Bank/AR/Other Current Asset
+  // are positive contributions; Credit Card and AP are negative (their
+  // balances in QB come signed already).
+  const sumType = (type) => (groups[type] || []).reduce((s, a) => s + Number(a.currentBalance || 0), 0);
+  const assets = sumType('Bank') + sumType('Accounts Receivable') + sumType('Other Current Asset');
+  const liabilities = Math.abs(sumType('Credit Card')) + sumType('Accounts Payable');
+  const netWorth = assets - liabilities;
+
+  const SECTIONS = [
+    { key: 'Bank',                 title: '💰 Bank Accounts',        tone: 'green'  },
+    { key: 'Credit Card',          title: '💳 Credit Cards',         tone: 'red'    },
+    { key: 'Accounts Receivable',  title: '📥 Accounts Receivable',  tone: 'blue'   },
+    { key: 'Accounts Payable',     title: '📤 Accounts Payable',     tone: 'orange' },
+    { key: 'Other Current Asset',  title: '🏦 Other Current Assets', tone: 'gray'   },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl bg-gradient-to-br from-omega-charcoal to-black text-white p-5">
+        <p className="text-[11px] uppercase tracking-wider text-white/60 font-semibold">
+          Patrimônio líquido (aproximado)
+        </p>
+        <p className={`text-3xl font-bold mt-1 ${netWorth < 0 ? 'text-red-300' : 'text-white'}`}>
+          {money(netWorth)}
+        </p>
+        <p className="text-[11px] text-white/50 mt-2">
+          Ativos {money(assets)} − Passivos {money(liabilities)}. Não é o patrimônio contábil completo —
+          ignora ativos fixos e equity.
+        </p>
+      </div>
+
+      {SECTIONS.map((s) => {
+        const items = groups[s.key] || [];
+        if (items.length === 0) return null;
+        const subtotal = items.reduce((sum, a) => sum + Number(a.currentBalance || 0), 0);
+        return (
+          <div key={s.key}>
+            <div className="flex items-center justify-between mb-2 px-1">
+              <p className="text-[11px] uppercase tracking-wider text-omega-stone font-semibold">{s.title}</p>
+              <p className="text-xs font-semibold text-omega-charcoal">
+                Subtotal: <span className={subtotal < 0 ? 'text-red-600' : ''}>{money(subtotal)}</span>
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {items.map((a) => (
+                <div key={a.id} className="rounded-xl border border-gray-200 p-4 bg-white">
+                  {a.subType && (
+                    <p className="text-[10px] uppercase tracking-wider text-omega-stone font-semibold">{a.subType}</p>
+                  )}
+                  <p className="font-bold text-omega-charcoal text-sm mt-1">{a.name}</p>
+                  <p className={`text-xl font-bold mt-2 ${a.currentBalance < 0 ? 'text-red-600' : 'text-omega-charcoal'}`}>
+                    {money(a.currentBalance)} <span className="text-[10px] font-normal text-omega-stone">{a.currency}</span>
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PnlCard({ label, data }) {
+  if (!data) return null;
+  const positive = data.netIncome >= 0;
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4">
+      <p className="text-[11px] uppercase tracking-wider text-omega-stone font-semibold">{label}</p>
+      <p className={`text-2xl font-bold mt-1 ${positive ? 'text-green-700' : 'text-red-600'}`}>
+        {money(data.netIncome)}
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <p className="text-[10px] text-omega-stone uppercase">Receita</p>
+          <p className="font-semibold text-omega-charcoal">{money(data.totalIncome)}</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-omega-stone uppercase">Despesa</p>
+          <p className="font-semibold text-omega-charcoal">{money(data.totalExpense)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverdueList({ title, icon: Icon, tone, items, totalLabel, totalAmount }) {
+  const toneStyles = {
+    red:    'bg-red-50  text-red-700  border-red-200',
+    orange: 'bg-omega-pale text-omega-orange border-omega-orange/30',
+  };
+  return (
+    <div className="bg-white border border-gray-200 rounded-2xl p-5">
+      <div className="flex items-center justify-between mb-3">
+        <p className="font-bold text-omega-charcoal flex items-center gap-2">
+          <Icon className="w-4 h-4" /> {title}
+        </p>
+        <p className="text-xs text-omega-stone">
+          {totalLabel}: <span className="font-bold text-omega-charcoal">{money(totalAmount)}</span>
+        </p>
+      </div>
+      <ul className="divide-y divide-gray-100">
+        {items.slice(0, 10).map((it) => (
+          <li key={it.id} className="py-2 flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-omega-charcoal text-sm truncate">{it.primary}</p>
+              <p className="text-[11px] text-omega-stone truncate">{it.secondary}</p>
+            </div>
+            {it.badge && (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${toneStyles[tone] || toneStyles.red}`}>
+                {it.badge}
+              </span>
+            )}
+            <p className="font-bold text-omega-charcoal text-sm w-24 text-right">{money(it.amount)}</p>
+          </li>
+        ))}
+      </ul>
+      {items.length > 10 && (
+        <p className="text-[11px] text-omega-stone mt-2 text-right">
+          +{items.length - 10} a mais — detalhes no QuickBooks.
+        </p>
+      )}
     </div>
   );
 }

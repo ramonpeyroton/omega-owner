@@ -22,9 +22,36 @@ import { json } from '../_lib/http.js';
 const AUTHORIZE_BASE = 'https://appcenter.intuit.com/connect/oauth2';
 const SCOPE = 'com.intuit.quickbooks.accounting';
 
+// Account types we surface in the Finance Company tab. We deliberately
+// skip Equity / Income / Expense / Cost-of-Goods-Sold / Fixed Asset:
+//   * Equity / Income / Expense are P&L lines, not balances
+//   * Fixed Asset (vehicles, equipment) doesn't move week-to-week
+// What's left answers "tem dinheiro pra pagar X?" in one glance.
+const ACCOUNT_TYPES = [
+  'Bank',
+  'Credit Card',
+  'Accounts Receivable',
+  'Accounts Payable',
+  'Other Current Asset',
+];
+
 const QUERY_ACCOUNTS =
   "select Id, Name, AccountType, AccountSubType, CurrentBalance, CurrencyRef, MetaData " +
-  "from Account where AccountType in ('Bank','Credit Card') and Active = true";
+  `from Account where AccountType in (${ACCOUNT_TYPES.map((t) => `'${t}'`).join(',')}) and Active = true`;
+
+// QB returns invoices/bills paged. We cap at 50 — more than that is a
+// signal Brenda needs to drill in via QB itself, not the dashboard.
+const OVERDUE_INVOICE_QUERY = (todayIso) =>
+  "select Id, DocNumber, CustomerRef, TotalAmt, Balance, DueDate, TxnDate " +
+  "from Invoice " +
+  `where Balance > '0' and DueDate < '${todayIso}' ` +
+  "order by DueDate asc maxresults 50";
+
+const BILLS_DUE_QUERY =
+  "select Id, DocNumber, VendorRef, TotalAmt, Balance, DueDate, TxnDate " +
+  "from Bill " +
+  "where Balance > '0' " +
+  "order by DueDate asc maxresults 50";
 
 function readCookie(req, name) {
   const raw = req.headers.cookie || '';
@@ -35,12 +62,15 @@ function readCookie(req, name) {
 export default async function handler(req, res) {
   const action = req.query?.action || '';
   switch (action) {
-    case 'auth':       return handleAuth(req, res);
-    case 'callback':   return handleCallback(req, res);
-    case 'status':     return handleStatus(req, res);
-    case 'disconnect': return handleDisconnect(req, res);
-    case 'balances':   return handleBalances(req, res);
-    default:           return json(res, 404, { error: 'Unknown action', action });
+    case 'auth':              return handleAuth(req, res);
+    case 'callback':          return handleCallback(req, res);
+    case 'status':            return handleStatus(req, res);
+    case 'disconnect':        return handleDisconnect(req, res);
+    case 'balances':          return handleBalances(req, res);
+    case 'pnl':               return handlePnl(req, res);
+    case 'overdue-invoices':  return handleOverdueInvoices(req, res);
+    case 'bills-due':         return handleBillsDue(req, res);
+    default:                  return json(res, 404, { error: 'Unknown action', action });
   }
 }
 
@@ -175,5 +205,134 @@ async function handleBalances(req, res) {
     });
   } catch (err) {
     return json(res, 500, { error: err?.message || 'Failed to fetch balances' });
+  }
+}
+
+// ─── pnl ─────────────────────────────────────────────────────────
+// Calls /reports/ProfitAndLoss twice — once for current month, once
+// for year-to-date — and parses out (totalIncome, totalExpense,
+// netIncome) from each. The QBO report response is deeply nested; we
+// dig down to Summary.ColData where the totals live.
+async function handlePnl(req, res) {
+  if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
+  try {
+    const row = await loadActiveTokens();
+    if (!row) return json(res, 200, { connected: false });
+
+    const today = new Date();
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const yearStart = new Date(today.getFullYear(), 0, 1);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+
+    const monthPath =
+      `/v3/company/{realmId}/reports/ProfitAndLoss?start_date=${fmt(monthStart)}&end_date=${fmt(today)}&accounting_method=Accrual`;
+    const ytdPath =
+      `/v3/company/{realmId}/reports/ProfitAndLoss?start_date=${fmt(yearStart)}&end_date=${fmt(today)}&accounting_method=Accrual`;
+
+    const [monthData, ytdData] = await Promise.all([
+      qbFetch(monthPath),
+      qbFetch(ytdPath),
+    ]);
+
+    return json(res, 200, {
+      connected: true,
+      month: parsePnlReport(monthData),
+      ytd: parsePnlReport(ytdData),
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    return json(res, 500, { error: err?.message || 'Failed to fetch P&L' });
+  }
+}
+
+// QBO P&L report has rows of type 'Section' with `group` like
+// 'Income' / 'Expenses' / 'GrossProfit' / 'NetIncome'. The total of
+// each section sits in the section's Summary.ColData. We pluck the
+// three we care about into a flat shape.
+function parsePnlReport(report) {
+  const out = { totalIncome: 0, totalExpense: 0, netIncome: 0, currency: report?.Header?.Currency || 'USD' };
+  const rows = report?.Rows?.Row || [];
+  for (const row of rows) {
+    const group = row.group;
+    const total = Number(row?.Summary?.ColData?.[1]?.value) || 0;
+    if (group === 'Income') out.totalIncome = total;
+    else if (group === 'Expenses') out.totalExpense = total;
+    else if (group === 'NetIncome') out.netIncome = total;
+  }
+  // If NetIncome row wasn't present (some reports skip it when zero),
+  // compute it. Income − Expenses ≈ NetIncome (ignores COGS / Other);
+  // good-enough for a glanceable card.
+  if (!out.netIncome) out.netIncome = out.totalIncome - out.totalExpense;
+  return out;
+}
+
+// ─── overdue invoices ────────────────────────────────────────────
+async function handleOverdueInvoices(req, res) {
+  if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
+  try {
+    const row = await loadActiveTokens();
+    if (!row) return json(res, 200, { connected: false, invoices: [] });
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const path = `/v3/company/{realmId}/query?query=${encodeURIComponent(OVERDUE_INVOICE_QUERY(todayIso))}`;
+    const data = await qbFetch(path);
+    const raw = data?.QueryResponse?.Invoice || [];
+    const invoices = raw.map((i) => ({
+      id: i.Id,
+      docNumber: i.DocNumber,
+      customer: i.CustomerRef?.name || '—',
+      customerId: i.CustomerRef?.value || null,
+      total: Number(i.TotalAmt) || 0,
+      balance: Number(i.Balance) || 0,
+      dueDate: i.DueDate,
+      txnDate: i.TxnDate,
+      daysPastDue: i.DueDate
+        ? Math.max(0, Math.floor((Date.now() - new Date(i.DueDate).getTime()) / 86400000))
+        : 0,
+    }));
+    return json(res, 200, {
+      connected: true,
+      invoices,
+      totalOpenBalance: invoices.reduce((s, i) => s + i.balance, 0),
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    return json(res, 500, { error: err?.message || 'Failed to fetch overdue invoices' });
+  }
+}
+
+// ─── bills due ───────────────────────────────────────────────────
+async function handleBillsDue(req, res) {
+  if (req.method !== 'GET') return json(res, 405, { error: 'Method not allowed' });
+  try {
+    const row = await loadActiveTokens();
+    if (!row) return json(res, 200, { connected: false, bills: [] });
+
+    const path = `/v3/company/{realmId}/query?query=${encodeURIComponent(BILLS_DUE_QUERY)}`;
+    const data = await qbFetch(path);
+    const raw = data?.QueryResponse?.Bill || [];
+    const today = Date.now();
+    const bills = raw.map((b) => ({
+      id: b.Id,
+      docNumber: b.DocNumber,
+      vendor: b.VendorRef?.name || '—',
+      vendorId: b.VendorRef?.value || null,
+      total: Number(b.TotalAmt) || 0,
+      balance: Number(b.Balance) || 0,
+      dueDate: b.DueDate,
+      txnDate: b.TxnDate,
+      daysPastDue: b.DueDate
+        ? Math.max(0, Math.floor((today - new Date(b.DueDate).getTime()) / 86400000))
+        : 0,
+    }));
+    return json(res, 200, {
+      connected: true,
+      bills,
+      totalOpenBalance: bills.reduce((s, b) => s + b.balance, 0),
+      overdueCount: bills.filter((b) => b.daysPastDue > 0).length,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    return json(res, 500, { error: err?.message || 'Failed to fetch bills' });
   }
 }

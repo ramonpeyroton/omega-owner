@@ -5,8 +5,16 @@ import { createEnvelope, getEnvelopeStatus } from '../lib/docusign';
 import LoadingSpinner from './LoadingSpinner';
 import Toast from './Toast';
 import StatusBadge from './StatusBadge';
+import ContractTemplate from './Contract/ContractTemplate';
 import { logAudit } from '../lib/audit';
 import { notify } from '../lib/notifications';
+
+// Build-time flag toggling the DocuSign send button. We deliberately
+// use VITE_DOCUSIGN_ENABLED (string '1') so Ramon can flip it on a
+// single Vercel env var the day DocuSign is contracted, without us
+// shipping a code change. The button stays visible-but-disabled in
+// the meantime so Brenda can see what the future flow will look like.
+const DOCUSIGN_CLIENT_ENABLED = import.meta.env?.VITE_DOCUSIGN_ENABLED === '1';
 
 const STEPS = [
   { id: 1, label: 'Review Estimate' },
@@ -466,78 +474,59 @@ export default function EstimateFlow({ job, user, onBack }) {
               {contract && <StatusBadge status={contract.docusign_status || contract.status} />}
             </div>
 
-            <div className="border border-gray-200 rounded-lg bg-omega-cloud p-6 text-sm text-omega-charcoal space-y-4">
-              <div>
-                <p className="font-bold text-base">OMEGA CONSTRUCTION AGREEMENT</p>
-                <p className="text-xs text-omega-stone mt-1">Preview — will be rendered as PDF on send</p>
-              </div>
-              <div>
-                <p className="font-semibold">Client</p>
-                <p>{job.client_name || '—'}</p>
-                <p className="text-omega-stone">{job.address || job.city || '—'}</p>
-              </div>
-              <div>
-                <p className="font-semibold">Scope of Work</p>
-                <ul className="list-disc list-inside text-omega-slate">
-                  {(estimate?.line_items || []).slice(0, 6).map((li, i) => (
-                    <li key={i}>{li.description || li.item}</li>
-                  ))}
-                  {(!estimate?.line_items || estimate.line_items.length === 0) && <li>— see attached estimate —</li>}
-                </ul>
-              </div>
-              <div>
-                <p className="font-semibold">Payment Plan</p>
-                <ol className="list-decimal list-inside text-omega-slate">
-                  {paymentPlan.map((p, i) => (
-                    <li key={i}>{p.label} — {p.percent}% (${Number(p.amount || 0).toLocaleString()}) {p.due_date ? `— ${p.due_date}` : ''}</li>
-                  ))}
-                </ol>
-              </div>
-              <div>
-                <p className="font-semibold">Standard Omega Terms</p>
-                <p className="text-omega-stone text-xs">Includes standard warranty, change-order policy, and payment terms as per Omega master agreement.</p>
-              </div>
-              <div className="grid grid-cols-2 gap-6 pt-4 border-t border-gray-200">
-                <div>
-                  <div className="h-12 border-b border-omega-charcoal" />
-                  <p className="text-xs text-omega-stone mt-1">Client Signature</p>
-                </div>
-                <div>
-                  <div className="h-12 border-b border-omega-charcoal" />
-                  <p className="text-xs text-omega-stone mt-1">Omega Representative</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Sales gated message */}
+            {/* Sales gated message — shown above the editable contract so
+                the seller knows they can review but Operations sends. */}
             {!perms.canSendContract && (
-              <div className="mt-4 flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
+              <div className="mb-4 flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
                 <Info className="w-4 h-4 text-blue-700 mt-0.5" />
-                <p className="text-sm text-blue-900">Contract will be sent by Operations team.</p>
+                <p className="text-sm text-blue-900">Contract will be sent by the Operations team.</p>
+              </div>
+            )}
+            {!DOCUSIGN_CLIENT_ENABLED && perms.canSendContract && (
+              <div className="mb-4 flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <Info className="w-4 h-4 text-amber-700 mt-0.5" />
+                <div className="text-sm text-amber-900">
+                  <p className="font-semibold">DocuSign not configured yet</p>
+                  <p className="text-xs mt-0.5">
+                    Use <strong>Download PDF</strong> below for now and email it to the client manually.
+                    The DocuSign button activates the moment <code>VITE_DOCUSIGN_ENABLED=1</code>
+                    {' '}is set on Vercel and the server-side credentials are in place.
+                  </p>
+                </div>
               </div>
             )}
 
-            <div className="flex items-center justify-between mt-5 flex-wrap gap-2">
-              {contract?.docusign_envelope_id ? (
-                <div className="text-sm text-omega-stone">
-                  Envelope ID: <span className="font-mono text-xs">{contract.docusign_envelope_id}</span>
-                  <button onClick={refreshContractStatus} className="ml-3 text-omega-info font-semibold text-xs">Refresh status</button>
-                </div>
-              ) : <div />}
+            <ContractTemplate
+              job={job}
+              estimate={estimate}
+              paymentPlan={paymentPlan}
+              canSendDocuSign={DOCUSIGN_CLIENT_ENABLED && perms.canSendContract && !contract?.signed_at}
+              onSendDocuSign={generateAndSendContract}
+              saving={saving}
+            />
 
-              <div className="flex gap-2">
-                {contract?.signed_at
-                  ? <button onClick={() => setStep(4)} className="px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold">Continue to Invoice</button>
-                  : <button onClick={generateAndSendContract} disabled={saving || !perms.canSendContract} className="px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60 inline-flex items-center gap-2">
-                      {perms.canSendContract ? <Send className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-                      {saving ? 'Sending…' : 'Send via DocuSign'}
-                    </button>
-                }
+            {contract?.docusign_envelope_id && (
+              <div className="mt-4 text-sm text-omega-stone">
+                Envelope ID: <span className="font-mono text-xs">{contract.docusign_envelope_id}</span>
+                <button onClick={refreshContractStatus} className="ml-3 text-omega-info font-semibold text-xs">Refresh status</button>
               </div>
-            </div>
+            )}
+
+            {contract?.signed_at && (
+              <div className="mt-5 flex justify-end">
+                <button
+                  onClick={() => setStep(4)}
+                  className="px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold"
+                >
+                  Continue to Invoice
+                </button>
+              </div>
+            )}
 
             {contract && !contract.signed_at && (
-              <p className="mt-3 text-xs text-omega-stone"><FileText className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Awaiting signature…</p>
+              <p className="mt-3 text-xs text-omega-stone">
+                <FileText className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Awaiting signature…
+              </p>
             )}
           </section>
         )}

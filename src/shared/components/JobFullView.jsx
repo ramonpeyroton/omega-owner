@@ -365,9 +365,10 @@ export default function JobFullView({
               {job.client_name || job.name || 'Untitled'}
             </h1>
           </div>
-          {/* Quick actions (desktop). Estimate Flow used to live here too,
-              but it now lives inside the Estimate tab so the seller has
-              one obvious place for everything related to the estimate. */}
+          {/* Quick actions (desktop). The Estimate Flow shortcut now
+              lives in the header again — it's the seller's most-used
+              gateway and the field crew asked to keep it one click
+              away from anywhere in the job, not buried in a tab. */}
           <div className="hidden sm:flex items-center gap-2">
             {onOpenQuestionnaire && (
               <button
@@ -375,6 +376,20 @@ export default function JobFullView({
                 className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-semibold"
               >
                 <ClipboardEdit className="w-3.5 h-3.5" /> Questionnaire
+              </button>
+            )}
+            {onOpenEstimateFlow && (
+              <button
+                onClick={() => { onOpenEstimateFlow(job); onClose?.(); }}
+                className="inline-flex items-center gap-2 pl-3 pr-2 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-xs font-bold shadow-sm transition-colors"
+                title="Review · Payment plan · Contract · Invoice"
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                <span className="text-left leading-tight">
+                  <span className="block text-[11px] font-bold">Open Estimate Flow</span>
+                  <span className="block text-[9px] font-medium text-white/85">Review · Payment plan · Contract · Invoice</span>
+                </span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
@@ -516,29 +531,9 @@ export default function JobFullView({
 
           {tab === 'estimate' && canSeeEstimate && (
             <div className="space-y-5">
-              {/* Open Estimate Flow — standalone wizard for sending to
-                  the client + generating contract + invoicing. Used to
-                  live in the top header bar; moved here so anything
-                  estimate-related has one home. The button is hidden
-                  if the host app didn't pass an onOpenEstimateFlow
-                  callback (e.g. read-only views). */}
-              {onOpenEstimateFlow && (
-                <button
-                  onClick={() => { onOpenEstimateFlow(job); onClose?.(); }}
-                  className="w-full inline-flex items-center justify-between gap-3 p-4 rounded-xl bg-omega-orange hover:bg-omega-dark text-white shadow-card transition-colors"
-                >
-                  <span className="flex items-center gap-3">
-                    <Receipt className="w-5 h-5" />
-                    <span className="text-left">
-                      <span className="block text-sm font-bold">Open Estimate Flow</span>
-                      <span className="block text-[11px] text-white/80 font-medium">
-                        Review · Payment plan · Contract · Invoice
-                      </span>
-                    </span>
-                  </span>
-                  <ArrowRight className="w-5 h-5 flex-shrink-0" />
-                </button>
-              )}
+              {/* The Open Estimate Flow shortcut moved back to the header
+                  bar (top-right) so it's reachable from any tab without
+                  scrolling. */}
 
               {/* Cost Projection — internal reference, hidden from sellers
                   (cost/margin data stays in Finance roles only). */}

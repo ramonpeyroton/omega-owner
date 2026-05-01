@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ShoppingCart, Calendar, ChevronRight, Store, Check, HardHat } from 'lucide-react';
+import {
+  ShoppingCart, Calendar, ChevronRight, Store, Check, HardHat, Briefcase,
+  AlertTriangle, CalendarDays, Plus, Camera, Clock, Package, FolderOpen,
+  Edit3, AlertCircle, Box, Bell,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import QuickTasksList from '../../../shared/components/QuickTasksList';
 import { logAudit } from '../../../shared/lib/audit';
@@ -23,6 +27,19 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob }) {
   const [activeJobs, setActiveJobs]   = useState([]);  // still fetched — shown in schedule
   const [materials, setMaterials]     = useState([]);  // [{ ...mat, jobs: {...} }]
   const [loading, setLoading]         = useState(true);
+  const [notifCount, setNotifCount]   = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { count } = await supabase
+          .from('notifications')
+          .select('id', { count: 'exact', head: true })
+          .eq('seen', false);
+        setNotifCount(count || 0);
+      } catch { /* badge stays at 0 */ }
+    })();
+  }, []);
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
@@ -84,6 +101,91 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob }) {
     weekday: 'long', month: 'long', day: 'numeric',
   }), []);
 
+  const greeting = useMemo(() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }, []);
+
+  // ─── Issues That Need Attention ─────────────────────────────────
+  // Computed client-side from data we already have:
+  //   • Jobs that are in_progress AND haven't been touched in 7+
+  //     days → "behind schedule".
+  //   • Materials needed for 3+ days that nobody has bought yet →
+  //     "delivery delayed".
+  //   • Calendar events of kind 'inspection' scheduled for today
+  //     or earlier that have no resolution yet → "inspection
+  //     pending".
+  const issues = useMemo(() => {
+    const now = Date.now();
+    const ms7 = 7 * 24 * 60 * 60 * 1000;
+    const ms3 = 3 * 24 * 60 * 60 * 1000;
+
+    const stale = activeJobs.filter((j) => {
+      const t = j.updated_at ? new Date(j.updated_at).getTime() : 0;
+      return t > 0 && now - t > ms7;
+    });
+
+    const oldMaterials = materials.filter((m) => {
+      const t = m.added_at ? new Date(m.added_at).getTime() : 0;
+      return t > 0 && now - t > ms3;
+    });
+
+    const pendingInspections = todayEvents.filter((e) => e.kind === 'inspection');
+
+    const out = [];
+    if (stale.length > 0) {
+      out.push({
+        id: 'stale',
+        icon: AlertCircle,
+        tone: 'red',
+        title: `${stale.length} job${stale.length === 1 ? '' : 's'} behind schedule`,
+        subtitle: stale.slice(0, 2).map((j) => j.client_name).filter(Boolean).join(', ') || '—',
+      });
+    }
+    if (oldMaterials.length > 0) {
+      out.push({
+        id: 'mats',
+        icon: Briefcase,
+        tone: 'orange',
+        title: 'Material delivery delayed',
+        subtitle: 'Check the Materials Run',
+      });
+    }
+    if (pendingInspections.length > 0) {
+      const ev = pendingInspections[0];
+      const job = ev.jobs;
+      out.push({
+        id: 'inspection',
+        icon: CalendarDays,
+        tone: 'blue',
+        title: `${pendingInspections.length} inspection${pendingInspections.length === 1 ? '' : 's'} pending`,
+        subtitle: job?.client_name ? `${job.client_name}${job.service ? ' – ' + job.service : ''}` : ev.title,
+      });
+    }
+    return out;
+  }, [activeJobs, materials, todayEvents]);
+
+  // ─── Today's Jobs progress + status ────────────────────────────
+  function jobProgressPct(job) {
+    const phases = job?.phase_data?.phases || [];
+    let total = 0, done = 0;
+    for (const p of phases) {
+      for (const it of (p.items || [])) {
+        total += 1;
+        if (it.done || it.completed) done += 1;
+      }
+    }
+    return total === 0 ? 0 : Math.round((done / total) * 100);
+  }
+  function jobOnTrack(job) {
+    // No fancy schedule yet — heuristic: stale = at risk, fresh = on
+    // track. Same threshold as the issues panel.
+    const t = job.updated_at ? new Date(job.updated_at).getTime() : Date.now();
+    return Date.now() - t <= 7 * 24 * 60 * 60 * 1000;
+  }
+
   // Group materials by store for the shopping list.
   const byStore = useMemo(() => {
     const map = {};
@@ -99,37 +201,262 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob }) {
     });
   }, [materials]);
 
+  // Issues count fed to the bell badge & the Issues card header.
+  const issuesCount = issues.length;
+  const eventsToday = todayEvents.length;
+  const jobsTodayCount = activeJobs.length;
+  const jobsInProgressLabel = `${jobsTodayCount} in progress`;
+
   return (
     <div className="flex-1 overflow-y-auto bg-omega-cloud">
-      <header className="px-6 md:px-8 py-5 bg-white border-b border-gray-200 sticky top-0 z-10">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-omega-stone font-bold">Today</p>
-        <h1 className="text-xl font-bold text-omega-charcoal">{nowLabel}</h1>
-      </header>
+      <div className="p-4 md:p-6 lg:p-8 space-y-5 max-w-6xl mx-auto">
 
-      <div className="p-4 md:p-6 space-y-5 max-w-3xl mx-auto">
+        {/* ─── Header ─────────────────────────────────────────── */}
+        <header className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-black text-omega-charcoal inline-flex items-center gap-2">
+              {greeting}, {user?.name || 'there'} <span>👋</span>
+            </h1>
+            <p className="text-sm text-omega-stone mt-1">{nowLabel}</p>
+          </div>
+          <button
+            onClick={() => onNavigate?.('notifications')}
+            className="relative p-2.5 rounded-xl bg-white border border-gray-100 shadow-sm hover:border-omega-orange transition-colors"
+            title="Notifications"
+            aria-label="Notifications"
+          >
+            <Bell className="w-5 h-5 text-omega-charcoal" />
+            {notifCount > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center text-[10px] font-bold rounded-full bg-omega-orange text-white">
+                {notifCount > 9 ? '9+' : notifCount}
+              </span>
+            )}
+          </button>
+        </header>
 
-        {/* ─── 1) Personal punch list ───────────────────────────── */}
-        <QuickTasksList user={user} />
+        {/* ─── 3 KPI cards ───────────────────────────────────── */}
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+          <KpiCard
+            icon={Briefcase}
+            iconBg="bg-orange-100"
+            iconColor="text-omega-orange"
+            value={jobsTodayCount}
+            label="Jobs Today"
+            subtitle={jobsInProgressLabel}
+          />
+          <KpiCard
+            icon={AlertTriangle}
+            iconBg="bg-red-100"
+            iconColor="text-red-500"
+            value={issuesCount}
+            label="Issues"
+            subtitle={issuesCount > 0 ? 'Need attention' : 'All clear'}
+          />
+          <KpiCard
+            icon={CalendarDays}
+            iconBg="bg-violet-100"
+            iconColor="text-violet-600"
+            value={eventsToday}
+            label="Events"
+            subtitle={eventsToday > 0 ? 'On schedule' : 'Nothing scheduled'}
+          />
+        </section>
 
-        {/* ─── 2) Materials Run — inline, grouped by store ─────── */}
-        <MaterialsInline
-          byStore={byStore}
-          totalCount={materials.length}
-          loading={loading}
-          onMark={markBought}
-          onOpenFull={() => onNavigate?.('materials-run')}
-        />
+        {/* ─── 4 Quick Action tiles ──────────────────────────── */}
+        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+          <ActionTile
+            icon={Plus}
+            label="Add Task"
+            color="bg-omega-orange"
+            onClick={() => {
+              // Smooth-scroll to the Punch List section so Gabriel
+              // can drop the new task right in.
+              document.getElementById('manager-punch-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }}
+          />
+          <ActionTile
+            icon={Box}
+            label="Materials"
+            color="bg-emerald-500"
+            onClick={() => onNavigate?.('materials-run')}
+          />
+          <ActionTile
+            icon={Camera}
+            label="Add Photo"
+            color="bg-blue-500"
+            onClick={() => {
+              // Photos live inside each job's Phases tab. Pop the
+              // user into Jobs so they can pick which job the photo
+              // belongs to — matches the existing flow.
+              onNavigate?.('dashboard');
+            }}
+          />
+          <ActionTile
+            icon={Clock}
+            label="Log Time"
+            color="bg-violet-500"
+            onClick={() => onNavigate?.('dashboard')}
+          />
+        </section>
 
-        {/* ─── 3) Today's schedule ─────────────────────────────── */}
-        <TodaySchedule
-          events={todayEvents}
-          inProgress={activeJobs}
-          loading={loading}
-          onOpenCalendar={() => onNavigate?.('calendar')}
-          onOpenJob={onSelectJob}
-        />
+        {/* ─── Issues That Need Attention ─────────────────────── */}
+        {issues.length > 0 && (
+          <section className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-bold text-omega-charcoal inline-flex items-center gap-2">
+                Issues That Need Attention
+                <span className="text-[11px] font-bold text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{issues.length}</span>
+              </h2>
+              <button onClick={() => onNavigate?.('dashboard')} className="text-xs font-semibold text-omega-orange hover:text-omega-dark inline-flex items-center gap-0.5">
+                View all <ChevronRight className="w-3 h-3" />
+              </button>
+            </div>
+            <ul className="divide-y divide-gray-100">
+              {issues.map((it) => {
+                const Icon = it.icon;
+                const tone = it.tone === 'red'
+                  ? { bg: 'bg-red-50', icon: 'text-red-500' }
+                  : it.tone === 'blue'
+                    ? { bg: 'bg-blue-50', icon: 'text-blue-500' }
+                    : { bg: 'bg-omega-pale', icon: 'text-omega-orange' };
+                return (
+                  <li key={it.id} className="py-2.5 flex items-center gap-3">
+                    <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${tone.bg}`}>
+                      <Icon className={`w-4 h-4 ${tone.icon}`} />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-omega-charcoal truncate">{it.title}</p>
+                      <p className="text-[12px] text-omega-stone truncate">{it.subtitle}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-omega-stone" />
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        {/* ─── Today's Jobs ──────────────────────────────────── */}
+        <section className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-bold text-omega-charcoal">Today's Jobs</h2>
+            <button onClick={() => onNavigate?.('calendar')} className="text-xs font-semibold text-omega-orange hover:text-omega-dark">
+              View full schedule
+            </button>
+          </div>
+
+          {loading ? (
+            <p className="text-xs text-omega-stone py-8 text-center">Loading…</p>
+          ) : activeJobs.length === 0 ? (
+            <p className="text-xs text-omega-stone py-8 text-center italic">No jobs in progress today.</p>
+          ) : (
+            <ul className="space-y-3">
+              {activeJobs.map((j) => {
+                const pct = jobProgressPct(j);
+                const onTrack = jobOnTrack(j);
+                return (
+                  <li key={j.id} className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr_auto_auto] gap-3 items-center border-l-4 border-omega-orange pl-3 sm:pl-4 py-1.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-bold text-omega-charcoal truncate">{j.client_name || 'Untitled'}</p>
+                        {j.service && (
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-omega-pale text-omega-orange">
+                            {j.service}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-omega-stone truncate mt-0.5">
+                        {[j.address, j.city].filter(Boolean).join(', ')}
+                      </p>
+                    </div>
+                    <div className="min-w-[120px]">
+                      <div className="flex items-center justify-between text-[11px] mb-1">
+                        <span className="font-bold text-omega-charcoal">{pct}%</span>
+                        <span className="text-omega-stone">Progress</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                        <div className="h-full bg-omega-orange" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md whitespace-nowrap ${
+                      onTrack ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                    }`}>
+                      {onTrack ? 'On Track' : 'At Risk'}
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => onSelectJob?.(j)}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-omega-orange text-[11px] font-bold text-omega-charcoal"
+                        title="Open job"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" /> Open
+                      </button>
+                      <button
+                        onClick={() => onSelectJob?.(j)}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-omega-orange text-[11px] font-bold text-omega-charcoal"
+                        title="Update progress"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" /> Update
+                      </button>
+                      <button
+                        onClick={() => onSelectJob?.(j)}
+                        className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-red-200 hover:bg-red-50 text-[11px] font-bold text-red-700"
+                        title="Flag an issue"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" /> Issue
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        {/* ─── Punch List + Materials Run (2 cols) ────────────── */}
+        <section id="manager-punch-list" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <QuickTasksList user={user} />
+          <MaterialsInline
+            byStore={byStore}
+            totalCount={materials.length}
+            loading={loading}
+            onMark={markBought}
+            onOpenFull={() => onNavigate?.('materials-run')}
+          />
+        </section>
       </div>
     </div>
+  );
+}
+
+// ─── KPI card ────────────────────────────────────────────────────────
+function KpiCard({ icon: Icon, iconBg, iconColor, value, label, subtitle }) {
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5 flex items-center gap-3 sm:gap-4">
+      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
+        <Icon className={`w-6 h-6 ${iconColor}`} />
+      </div>
+      <div className="min-w-0">
+        <p className="text-3xl font-black text-omega-charcoal tabular-nums leading-none">{value}</p>
+        <p className="text-sm font-bold text-omega-charcoal mt-1">{label}</p>
+        <p className="text-xs text-omega-stone mt-0.5">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Quick Action tile ───────────────────────────────────────────────
+function ActionTile({ icon: Icon, label, color, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="bg-white rounded-2xl border border-gray-100 shadow-card hover:shadow-card-hover hover:-translate-y-0.5 transition-all p-4 sm:p-5 flex flex-col items-center gap-2"
+    >
+      <span className={`w-12 h-12 rounded-full ${color} flex items-center justify-center text-white shadow-md`}>
+        <Icon className="w-6 h-6" />
+      </span>
+      <span className="text-sm font-bold text-omega-charcoal">{label}</span>
+    </button>
   );
 }
 

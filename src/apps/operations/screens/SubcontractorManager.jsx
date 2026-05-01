@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Upload, Send, AlertTriangle, X, Edit3, Trash2, Save, FileDown } from 'lucide-react';
+import { Plus, Upload, Send, AlertTriangle, X, Edit3, Trash2, Save, FileDown, Search } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { createEnvelope } from '../../../shared/lib/docusign';
 import { downloadSubAgreementPdf } from '../../../shared/lib/subAgreementPdf';
@@ -9,7 +9,7 @@ import StatusBadge from '../components/StatusBadge';
 import COIBadge, { getCoiState } from '../components/COIBadge';
 import SubcontractorCardsView from '../components/SubcontractorCardsView';
 import { logAudit } from '../../../shared/lib/audit';
-import { subInlineLabel } from '../../../shared/lib/subcontractor';
+import { subInlineLabel, subDisplayNames } from '../../../shared/lib/subcontractor';
 import { formatPhoneInput, toE164 } from '../../../shared/lib/phone';
 
 // Mirrors the same flag EstimateFlow uses. When the env var isn't '1',
@@ -88,6 +88,16 @@ export default function SubcontractorManager({ user }) {
     job_id: '', subcontractor_id: '', scope_of_work: '',
     their_estimate: 0, payment_plan: [], start_date: '', end_date: '',
   });
+  // Profile modal — opens when the seller clicks a card in the Cards
+  // tab. Shows the full sub profile with an "Edit profile" button.
+  const [profileSub, setProfileSub] = useState(null);
+  // Agreement detail modal — opens when the seller clicks an agreement
+  // card in the Agreements tab. Shows the saved metadata, lets them
+  // re-download the printable PDF, and offers a delete option.
+  const [openAgreement, setOpenAgreement] = useState(null);
+  const [deletingAgreement, setDeletingAgreement] = useState(false);
+  // Free-text search box on the Agreements tab.
+  const [agrSearch, setAgrSearch] = useState('');
 
   useEffect(() => { loadAll(); }, []);
 
@@ -181,6 +191,34 @@ export default function SubcontractorManager({ user }) {
   // i.e. not explicitly cancelled or declined).
   function activeAgreementsFor(subId) {
     return agreements.filter((a) => a.subcontractor_id === subId && !['declined', 'cancelled'].includes((a.status || '').toLowerCase()));
+  }
+
+  // Delete a single agreement row (used when an agreement was cancelled
+  // and is being re-issued). Triggered from the AgreementDetailModal.
+  // The row is hard-deleted — there's no soft-delete column on
+  // subcontractor_agreements yet. If we add one later, this is the
+  // place to flip it instead.
+  async function confirmDeleteAgreement() {
+    if (!openAgreement) return;
+    setDeletingAgreement(true);
+    try {
+      const { error } = await supabase.from('subcontractor_agreements').delete().eq('id', openAgreement.id);
+      if (error) throw error;
+      setAgreements((prev) => prev.filter((a) => a.id !== openAgreement.id));
+      logAudit({
+        user: null,
+        action: 'sub_agreement.delete',
+        entityType: 'subcontractor_agreement',
+        entityId: openAgreement.id,
+        details: { sub_id: openAgreement.subcontractor_id, job_id: openAgreement.job_id },
+      });
+      setToast({ type: 'success', message: 'Agreement deleted' });
+      setOpenAgreement(null);
+    } catch (err) {
+      setToast({ type: 'error', message: err.message || 'Failed to delete agreement' });
+    } finally {
+      setDeletingAgreement(false);
+    }
   }
 
   async function confirmDeleteSub() {
@@ -365,7 +403,6 @@ export default function SubcontractorManager({ user }) {
         <div className="border-b border-gray-200 flex gap-1">
           {[
             { id: 'cards',      label: 'Cards' },
-            { id: 'subs',       label: 'Roster' },
             { id: 'agreements', label: 'Agreements' },
           ].map((t) => (
             <button
@@ -390,120 +427,25 @@ export default function SubcontractorManager({ user }) {
             jobs={jobs}
             onAddSub={() => setShowAddSub(true)}
             onAddAgreement={() => setShowAddAgr(true)}
-            onEditSub={openEditSub}
+            onSelectSub={setProfileSub}
           />
         )}
 
-        {tab === 'subs' && (
-          <>
-            {expiringCount > 0 && (
-              <div className="flex items-center gap-3 p-4 rounded-xl border border-amber-200 bg-amber-50">
-                <AlertTriangle className="w-5 h-5 text-amber-700" />
-                <p className="text-sm text-amber-800 font-medium">
-                  {expiringCount} subcontractor(s) have a COI expiring within 30 days or already expired.
-                </p>
-              </div>
-            )}
-
-            <div className="flex justify-end">
-              <button onClick={() => setShowAddSub(true)} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold">
-                <Plus className="w-4 h-4" /> Add Subcontractor
-              </button>
-            </div>
-
-            <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-omega-cloud text-omega-stone uppercase text-xs tracking-wider">
-                  <tr>
-                    <th className="px-4 py-3 text-left">Name</th>
-                    <th className="px-4 py-3 text-left">Trade</th>
-                    <th className="px-4 py-3 text-left">Tax ID</th>
-                    <th className="px-4 py-3 text-left">Phone</th>
-                    <th className="px-4 py-3 text-left">Email</th>
-                    <th className="px-4 py-3 text-left">COI</th>
-                    <th className="px-4 py-3 text-left">Expiry</th>
-                    <th className="px-4 py-3"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {subs.length === 0 && (
-                    <tr><td colSpan={8} className="px-4 py-8 text-center text-omega-stone">No subcontractors yet.</td></tr>
-                  )}
-                  {subs.map((s) => (
-                    <tr key={s.id} className="hover:bg-omega-cloud/40">
-                      <td className="px-4 py-3 font-medium text-omega-charcoal">{s.name}</td>
-                      <td className="px-4 py-3">{s.trade || '—'}</td>
-                      <td className="px-4 py-3 font-mono text-xs">{maskTaxId(s.tax_id)}</td>
-                      <td className="px-4 py-3">{s.phone || '—'}</td>
-                      <td className="px-4 py-3">{s.email || '—'}</td>
-                      <td className="px-4 py-3"><COIBadge expiryDate={s.coi_expiry_date} /></td>
-                      <td className="px-4 py-3">{s.coi_expiry_date ? new Date(s.coi_expiry_date).toLocaleDateString() : '—'}</td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="inline-flex flex-wrap gap-2 justify-end">
-                          <label className="inline-flex items-center gap-1 text-xs font-semibold text-omega-info hover:text-blue-900 cursor-pointer">
-                            <Upload className="w-3.5 h-3.5" /> COI
-                            <input type="file" accept="application/pdf" className="hidden" onChange={(e) => uploadCoiFor(s, e.target.files?.[0])} />
-                          </label>
-                          <button onClick={() => openEditSub(s)} className="inline-flex items-center gap-1 text-xs font-semibold text-omega-orange hover:text-omega-dark">
-                            <Edit3 className="w-3.5 h-3.5" /> Edit
-                          </button>
-                          <button onClick={() => setDeleteSub(s)} className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 hover:text-red-700">
-                            <Trash2 className="w-3.5 h-3.5" /> Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
+        {/* Roster tab was removed per Ramon's reorg — the Cards tab now
+            covers everything the seller needs to see at a glance, and
+            the per-sub profile modal (opened by clicking a card) holds
+            the legacy roster fields (tax id, expiry, COI upload, etc). */}
 
         {tab === 'agreements' && (
-          <>
-            <div className="flex justify-end">
-              <button onClick={() => setShowAddAgr(true)} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold">
-                <Plus className="w-4 h-4" /> New Agreement
-              </button>
-            </div>
-
-            <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-omega-cloud text-omega-stone uppercase text-xs tracking-wider">
-                  <tr>
-                    <th className="px-4 py-3 text-left">Sub</th>
-                    <th className="px-4 py-3 text-left">Job</th>
-                    <th className="px-4 py-3 text-left">Scope</th>
-                    <th className="px-4 py-3 text-left">Amount</th>
-                    <th className="px-4 py-3 text-left">Status</th>
-                    <th className="px-4 py-3 text-left">Start</th>
-                    <th className="px-4 py-3 text-left">End</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {agreements.length === 0 && (
-                    <tr><td colSpan={7} className="px-4 py-8 text-center text-omega-stone">No agreements yet.</td></tr>
-                  )}
-                  {agreements.map((a) => {
-                    const sub = subs.find((s) => s.id === a.subcontractor_id);
-                    const job = jobs.find((j) => j.id === a.job_id);
-                    return (
-                      <tr key={a.id} className="hover:bg-omega-cloud/40">
-                        <td className="px-4 py-3 font-medium text-omega-charcoal">{sub ? subInlineLabel(sub) : '—'}</td>
-                        <td className="px-4 py-3">{job?.client_name || job?.name || '—'}</td>
-                        <td className="px-4 py-3 max-w-xs truncate">{a.scope_of_work || '—'}</td>
-                        <td className="px-4 py-3">${Number(a.their_estimate || 0).toLocaleString()}</td>
-                        <td className="px-4 py-3"><StatusBadge status={a.docusign_status || a.status} /></td>
-                        <td className="px-4 py-3">{a.start_date || '—'}</td>
-                        <td className="px-4 py-3">{a.end_date || '—'}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </>
+          <AgreementsList
+            agreements={agreements}
+            subs={subs}
+            jobs={jobs}
+            search={agrSearch}
+            onSearchChange={setAgrSearch}
+            onAdd={() => setShowAddAgr(true)}
+            onSelect={setOpenAgreement}
+          />
         )}
       </div>
 
@@ -777,6 +719,446 @@ export default function SubcontractorManager({ user }) {
           </div>
         );
       })()}
+
+      {/* Sub profile modal — opened from a Cards-tab row click. Read-only
+          view of the full profile with an Edit profile button that hands
+          off to the existing Edit Sub form. */}
+      {profileSub && (
+        <SubProfileModal
+          sub={profileSub}
+          agreements={agreements.filter((a) => a.subcontractor_id === profileSub.id)}
+          jobs={jobs}
+          onClose={() => setProfileSub(null)}
+          onUploadCoi={(file) => uploadCoiFor(profileSub, file)}
+          onEditProfile={() => {
+            const sub = profileSub;
+            setProfileSub(null);
+            openEditSub(sub);
+          }}
+        />
+      )}
+
+      {/* Agreement detail modal — opened from a row click on the
+          Agreements tab. Re-download the printable PDF or hard-delete
+          the row when an agreement was cancelled. */}
+      {openAgreement && (
+        <AgreementDetailModal
+          agreement={openAgreement}
+          sub={subs.find((s) => s.id === openAgreement.subcontractor_id)}
+          job={jobs.find((j) => j.id === openAgreement.job_id)}
+          deleting={deletingAgreement}
+          onClose={() => setOpenAgreement(null)}
+          onDelete={confirmDeleteAgreement}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── AgreementsList ─────────────────────────────────────────────────
+// Card-style list of agreements with a search box. Cards are clickable
+// — clicking one opens the detail modal. Replaces the old wide HTML
+// table that didn't fit smaller viewports and didn't scale past ~20
+// rows visually.
+function AgreementsList({ agreements, subs, jobs, search, onSearchChange, onAdd, onSelect }) {
+  const subsById = useMemo(() => {
+    const m = new Map();
+    subs.forEach((s) => m.set(s.id, s));
+    return m;
+  }, [subs]);
+  const jobsById = useMemo(() => {
+    const m = new Map();
+    jobs.forEach((j) => m.set(j.id, j));
+    return m;
+  }, [jobs]);
+
+  const visible = useMemo(() => {
+    const q = (search || '').trim().toLowerCase();
+    if (!q) return agreements;
+    return agreements.filter((a) => {
+      const sub = subsById.get(a.subcontractor_id);
+      const job = jobsById.get(a.job_id);
+      const hay = [
+        sub ? subInlineLabel(sub) : '',
+        sub?.contact_name || '', sub?.name || '',
+        sub?.phone || '', sub?.email || '', sub?.trade || '',
+        job?.client_name || '', job?.address || '',
+        a.scope_of_work || '',
+        String(a.their_estimate || ''),
+        a.status || '',
+      ].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }, [agreements, subsById, jobsById, search]);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-sm text-omega-stone">
+          {visible.length} of {agreements.length} agreement{agreements.length === 1 ? '' : 's'}
+        </p>
+        <button onClick={onAdd} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold">
+          <Plus className="w-4 h-4" /> New Agreement
+        </button>
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-stone pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Search by sub, client, address, scope, status…"
+          className="w-full pl-9 pr-9 py-2.5 rounded-xl border border-gray-200 text-sm focus:border-omega-orange focus:outline-none transition"
+        />
+        {search && (
+          <button
+            onClick={() => onSearchChange('')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-omega-stone hover:text-omega-charcoal"
+            title="Clear search"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {visible.length === 0 ? (
+        <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-sm text-omega-stone">
+          {agreements.length === 0 ? 'No agreements yet.' : `No agreements match "${search}".`}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visible.map((a) => {
+            const sub = subsById.get(a.subcontractor_id);
+            const job = jobsById.get(a.job_id);
+            return (
+              // Use a clickable <div role="button"> instead of a <button>:
+              // an actual <button> only legally accepts phrasing content,
+              // and StatusBadge/inline <p> trip the React DOM-nesting
+              // check at runtime. Keyboard activation is wired so screen
+              // readers and keyboard users still get the button affordance.
+              <div
+                key={a.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(a)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(a); } }}
+                className="cursor-pointer bg-white rounded-xl border border-gray-200 hover:border-omega-orange hover:shadow-sm transition-colors px-4 py-3 flex items-center gap-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-bold text-omega-charcoal truncate">
+                      {sub ? subInlineLabel(sub) : 'Unknown sub'}
+                    </span>
+                    <span className="text-xs text-omega-stone">→</span>
+                    <span className="text-sm text-omega-charcoal truncate">
+                      {job?.client_name || job?.name || 'Unknown client'}
+                    </span>
+                  </div>
+                  {a.scope_of_work && (
+                    <span className="block text-xs text-omega-stone truncate mt-0.5">{a.scope_of_work}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <StatusBadge status={a.docusign_status || a.status} />
+                  <span className="text-sm font-black text-omega-charcoal tabular-nums">
+                    ${Number(a.their_estimate || 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── SubProfileModal ────────────────────────────────────────────────
+// Read-only profile card opened by clicking a row in the Cards tab.
+// Mirrors every field from the Add/Edit Sub forms, plus a quick
+// summary of jobs and a CTA to edit. The Edit profile button hands
+// off to the existing Edit Sub modal handled by the parent component.
+function SubProfileModal({ sub, agreements, jobs, onClose, onEditProfile, onUploadCoi }) {
+  const { primary, secondary } = subDisplayNames(sub);
+  const totalValue = (agreements || []).reduce((acc, a) => acc + (Number(a.their_estimate) || 0), 0);
+  const completedCount = (agreements || []).filter((a) => a.status === 'completed' || a.status === 'signed').length;
+  const jobsById = useMemo(() => {
+    const m = new Map();
+    (jobs || []).forEach((j) => m.set(j.id, j));
+    return m;
+  }, [jobs]);
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 border-b border-gray-200 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold text-omega-stone uppercase tracking-wider">Subcontractor</p>
+            <h2 className="text-xl font-bold text-omega-charcoal mt-0.5">{primary}</h2>
+            {secondary && <p className="text-sm text-omega-stone mt-0.5">{secondary}</p>}
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <COIBadge expiryDate={sub.coi_expiry_date} />
+              {sub.trade && (
+                <span className="text-[10px] font-bold uppercase tracking-wider text-omega-stone bg-omega-cloud border border-gray-200 px-1.5 py-0.5 rounded">
+                  {sub.trade}
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded text-omega-stone hover:text-omega-charcoal flex-shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-3">
+          <Field label="Contact name" value={sub.contact_name} />
+          <Field label="Company name" value={sub.name} />
+          <Field label="Phone" value={sub.phone} />
+          <Field label="Email" value={sub.email} />
+          <Field label="Tax ID" value={maskTaxId(sub.tax_id)} mono />
+          <Field label="Trade" value={sub.trade} />
+          <Field label="Address" value={sub.address} colSpan={2} />
+          <Field label="Insurance company" value={sub.insurance_company} />
+          <Field label="Policy number" value={sub.insurance_policy_number} mono />
+          <Field
+            label="COI expiry"
+            value={sub.coi_expiry_date ? new Date(sub.coi_expiry_date).toLocaleDateString() : null}
+          />
+          <Field
+            label="Preferred language"
+            value={(() => {
+              switch (sub.preferred_language) {
+                case 'pt': return 'Português (PT-BR)';
+                case 'es': return 'Español';
+                default:   return 'English';
+              }
+            })()}
+          />
+          <div className="sm:col-span-2 flex items-center gap-2 flex-wrap">
+            {sub.coi_url && (
+              <a
+                href={sub.coi_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-omega-orange text-xs font-bold text-omega-charcoal"
+              >
+                View current COI ↗
+              </a>
+            )}
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 hover:border-omega-orange text-xs font-bold text-omega-info cursor-pointer">
+              <Upload className="w-3.5 h-3.5" /> Upload new COI
+              <input
+                type="file"
+                accept="application/pdf,image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onUploadCoi?.(file);
+                }}
+              />
+            </label>
+          </div>
+        </div>
+
+        {/* Summary of agreements — keeps the profile useful without
+            duplicating the full Agreements tab. Click an agreement to
+            jump into its detail. */}
+        <div className="px-5 pb-2">
+          <p className="text-[11px] font-semibold text-omega-stone uppercase tracking-wider mb-2">
+            Agreements ({agreements.length}) · {completedCount} done · ${totalValue.toLocaleString()} total
+          </p>
+          {agreements.length === 0 ? (
+            <p className="text-xs text-omega-stone italic mb-2">No agreements yet for this sub.</p>
+          ) : (
+            <ul className="border border-gray-100 rounded-lg overflow-hidden divide-y divide-gray-100 mb-2">
+              {agreements.slice(0, 6).map((a) => {
+                const job = jobsById.get(a.job_id);
+                return (
+                  <li key={a.id} className="px-3 py-2 flex items-center gap-2 text-xs">
+                    <span className="truncate flex-1 text-omega-charcoal">
+                      {job?.client_name || 'Unknown client'}
+                      {job?.address && <span className="text-omega-stone"> — {job.address}</span>}
+                    </span>
+                    <StatusBadge status={a.docusign_status || a.status} />
+                    <span className="font-bold text-omega-charcoal tabular-nums flex-shrink-0">
+                      ${Number(a.their_estimate || 0).toLocaleString()}
+                    </span>
+                  </li>
+                );
+              })}
+              {agreements.length > 6 && (
+                <li className="px-3 py-1.5 text-[11px] text-omega-stone italic text-center">
+                  +{agreements.length - 6} more — see Agreements tab
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
+
+        <div className="p-5 border-t border-gray-200 flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold">
+            Close
+          </button>
+          <button
+            onClick={onEditProfile}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold"
+          >
+            <Edit3 className="w-4 h-4" /> Edit profile
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, mono = false, colSpan = 1 }) {
+  const span = colSpan === 2 ? 'sm:col-span-2' : '';
+  return (
+    <div className={span}>
+      <p className="text-[10px] font-semibold text-omega-stone uppercase tracking-wider">{label}</p>
+      <p className={`text-sm text-omega-charcoal mt-0.5 break-words ${mono ? 'font-mono' : ''}`}>
+        {value || <span className="text-omega-fog italic">—</span>}
+      </p>
+    </div>
+  );
+}
+
+// ─── AgreementDetailModal ───────────────────────────────────────────
+// Opens when the seller clicks an agreement row. Shows the saved
+// metadata and offers two actions:
+//   1. Re-download the printable PDF (handy when the original is lost
+//      or wasn't sent yet — generated client-side via html2pdf, same
+//      pipeline as the original "Generate Agreement PDF" button).
+//   2. Delete the agreement row entirely. Used when an agreement was
+//      cancelled and is being re-issued from scratch — confirmation is
+//      gated by a yes/no prompt before the delete fires.
+function AgreementDetailModal({ agreement, sub, job, deleting, onClose, onDelete }) {
+  const [downloading, setDownloading] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloadError, setDownloadError] = useState('');
+  const planRows = Array.isArray(agreement.payment_plan) ? agreement.payment_plan : [];
+
+  async function regeneratePdf() {
+    setDownloadError('');
+    setDownloading(true);
+    try {
+      await downloadSubAgreementPdf({
+        job, subcontractor: sub,
+        scope: agreement.scope_of_work,
+        amount: Number(agreement.their_estimate) || 0,
+        paymentPlan: planRows,
+        startDate: agreement.start_date,
+        endDate: agreement.end_date,
+      });
+    } catch (err) {
+      setDownloadError(err?.message || 'Failed to generate PDF');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/60 flex items-center justify-center p-4" onClick={() => !deleting && onClose()}>
+      <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="p-5 border-b border-gray-200 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold text-omega-stone uppercase tracking-wider">Subcontractor Agreement</p>
+            <h2 className="text-lg font-bold text-omega-charcoal mt-0.5">
+              {sub ? subInlineLabel(sub) : 'Unknown sub'}
+            </h2>
+            <p className="text-sm text-omega-stone mt-0.5">
+              {job?.client_name || 'Unknown client'}
+              {job?.address && ` — ${job.address}`}
+            </p>
+            <div className="mt-2"><StatusBadge status={agreement.docusign_status || agreement.status} /></div>
+          </div>
+          <button onClick={onClose} className="p-1 rounded text-omega-stone hover:text-omega-charcoal flex-shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <p className="text-[10px] font-semibold text-omega-stone uppercase tracking-wider mb-1">Scope of work</p>
+            <div className="text-sm text-omega-charcoal whitespace-pre-wrap border border-gray-100 bg-omega-cloud rounded-lg p-3">
+              {agreement.scope_of_work || <span className="text-omega-fog italic">No scope recorded.</span>}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <Field label="Total" value={`$${Number(agreement.their_estimate || 0).toLocaleString()}`} />
+            <Field label="Start date" value={agreement.start_date ? new Date(agreement.start_date).toLocaleDateString() : null} />
+            <Field label="End date" value={agreement.end_date ? new Date(agreement.end_date).toLocaleDateString() : null} />
+          </div>
+
+          {planRows.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-omega-stone uppercase tracking-wider mb-1">Payment plan</p>
+              <ul className="border border-gray-100 rounded-lg overflow-hidden divide-y divide-gray-100">
+                {planRows.map((p, i) => (
+                  <li key={i} className="px-3 py-2 flex items-center justify-between text-sm">
+                    <span className="text-omega-charcoal">{p.label || `Milestone ${i + 1}`}</span>
+                    <span className="font-bold tabular-nums">{p.percent}%</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {agreement.docusign_envelope_id && (
+            <Field label="DocuSign envelope" value={agreement.docusign_envelope_id} mono />
+          )}
+
+          {downloadError && (
+            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
+              {downloadError}
+            </div>
+          )}
+        </div>
+
+        <div className="p-5 border-t border-gray-200 flex flex-wrap items-center justify-between gap-2">
+          {confirmDelete ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-red-700 font-semibold">Delete permanently?</span>
+              <button
+                onClick={onDelete}
+                disabled={deleting}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-xs font-bold"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> {deleting ? 'Deleting…' : 'Yes, delete'}
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-red-300 text-red-700 hover:bg-red-50 text-xs font-bold"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete agreement
+            </button>
+          )}
+
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold">
+              Close
+            </button>
+            <button
+              onClick={regeneratePdf}
+              disabled={downloading}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark disabled:opacity-60 text-white text-sm font-semibold"
+            >
+              <FileDown className="w-4 h-4" /> {downloading ? 'Generating…' : 'Re-download PDF'}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

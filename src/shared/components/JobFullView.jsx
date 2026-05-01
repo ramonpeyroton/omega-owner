@@ -741,40 +741,41 @@ function DetailsTab({
     <div className="space-y-5">
       {/* Client info card */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        {/* Cover photo — hidden for read-only-basic (receptionist) since
-            she shouldn't be uploading job-cover assets. */}
-        {!readOnlyBasic && (
-          <div className="mb-5 pb-5 border-b border-gray-100">
-            <JobCoverPhotoUpload job={job} onUpdated={onJobUpdated} />
-          </div>
-        )}
+        {/* Cover photo — visible to everyone, including receptionist.
+            Rafaela needs to be able to attach a photo to the lead at
+            intake time so the seller already has visual context when
+            picking up the card. */}
+        <div className="mb-5 pb-5 border-b border-gray-100">
+          <JobCoverPhotoUpload job={job} onUpdated={onJobUpdated} />
+        </div>
 
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h2 className="text-lg font-bold text-omega-charcoal">Client & Job Info</h2>
-          {/* Edit / Save controls hidden for read-only-basic. */}
-          {!readOnlyBasic && (
-            <div className="flex items-center gap-2">
-              {!editing ? (
-                <>
-                  <button onClick={() => setEditing(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
-                    <Edit3 className="w-4 h-4" /> Edit
+          {/* Edit / Save are open to receptionist now too — she can fix
+              a typo or update an address from the card. The Questionnaire
+              button remains role-gated (null callback for receptionist)
+              so it stays hidden. */}
+          <div className="flex items-center gap-2">
+            {!editing ? (
+              <>
+                <button onClick={() => setEditing(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
+                  <Edit3 className="w-4 h-4" /> Edit
+                </button>
+                {onOpenQuestionnaire && (
+                  <button onClick={onOpenQuestionnaire} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
+                    <ClipboardEdit className="w-4 h-4" /> Questionnaire
                   </button>
-                  {onOpenQuestionnaire && (
-                    <button onClick={onOpenQuestionnaire} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
-                      <ClipboardEdit className="w-4 h-4" /> Questionnaire
-                    </button>
-                  )}
-                </>
-              ) : (
-                <>
-                  <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-semibold">Cancel</button>
-                  <button onClick={saveEdits} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60">
-                    <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save Changes'}
-                  </button>
-                </>
-              )}
-            </div>
-          )}
+                )}
+              </>
+            ) : (
+              <>
+                <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-semibold">Cancel</button>
+                <button onClick={saveEdits} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60">
+                  <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save Changes'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {!editing ? (

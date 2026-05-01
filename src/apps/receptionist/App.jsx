@@ -4,6 +4,7 @@ import LeadsList from './screens/LeadsList';
 import Sidebar from './components/Sidebar';
 import PendingVisitBanner from './components/PendingVisitBanner';
 import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
+import PipelineKanban from '../../shared/components/PipelineKanban';
 import { useBackNavHome } from '../../shared/lib/backNav';
 
 const PENDING_VISIT_KEY = 'omega_receptionist_pending_visit';
@@ -97,6 +98,18 @@ export default function ReceptionistApp({ user, onLogout }) {
           onBack={() => navigate('new-lead')}
           onLogout={onLogout}
         />
+      );
+    }
+    if (screen === 'pipeline') {
+      // Read-only kanban — Rafaela can see where every lead is in the
+      // funnel but cannot drag cards between phases nor open the full
+      // job tools. Clicking a card surfaces a stripped JobFullView with
+      // only the basic info tab (handled by the receptionist role gate
+      // inside JobFullView itself).
+      return (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <PipelineKanban user={user} filterBySalesperson={false} readOnly />
+        </div>
       );
     }
     return <CalendarScreen user={user} />;

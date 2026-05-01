@@ -50,6 +50,12 @@ const SUBS_ROLES = new Set(['owner', 'operations', 'sales', 'salesperson', 'admi
 // phase progress) would silently disappear.
 const RESET_BLOCKED_STATUSES = new Set(['contract_signed', 'in_progress', 'completed']);
 
+// Roles that see a stripped-down JobFullView: only the Details tab,
+// no Edit/Delete/Reset/Estimate-Flow buttons. Used by the receptionist
+// who needs to see basic info on a card from the read-only Pipeline
+// view but isn't responsible for editing or moving any of it.
+const READ_ONLY_BASIC_ROLES = new Set(['receptionist']);
+
 function pipelinePaletteFor(key) {
   const c = PIPELINE_COLORS[key];
   return { bg: c?.tailwindBg || 'bg-gray-400', text: 'text-white' };
@@ -98,7 +104,11 @@ export default function JobFullView({
 }) {
   const [job, setJob] = useState(initialJob);
   // Report is the primary landing tab — it's why most people open the job.
-  const [tab, setTab] = useState('report');
+  // For receptionist (READ_ONLY_BASIC_ROLES), we land on Details directly
+  // because that's the only tab they have.
+  const [tab, setTab] = useState(
+    READ_ONLY_BASIC_ROLES.has(user?.role) ? 'details' : 'report'
+  );
   const [estimate, setEstimate] = useState(null);
   const [contract, setContract] = useState(null);
   const [toast, setToast] = useState(null);
@@ -124,10 +134,15 @@ export default function JobFullView({
   const [resetPinError, setResetPinError] = useState('');
   const [resetting, setResetting] = useState(false);
 
-  const canSeeFinancials = FINANCIAL_ROLES.has(user?.role);
-  const canSeeEstimate   = ESTIMATE_ROLES.has(user?.role);
-  const canContact       = CONTACT_ROLES.has(user?.role);
-  const canSeeSubs       = SUBS_ROLES.has(user?.role);
+  // Receptionist gets a read-only minimal view: only the Details tab,
+  // no edit/delete/reset/estimate-flow controls. Every other role
+  // checks below get an explicit `&& !readOnlyBasic` so they evaluate
+  // to false for receptionist, hiding their tabs.
+  const readOnlyBasic    = READ_ONLY_BASIC_ROLES.has(user?.role);
+  const canSeeFinancials = !readOnlyBasic && FINANCIAL_ROLES.has(user?.role);
+  const canSeeEstimate   = !readOnlyBasic && ESTIMATE_ROLES.has(user?.role);
+  const canContact       = !readOnlyBasic && CONTACT_ROLES.has(user?.role);
+  const canSeeSubs       = !readOnlyBasic && SUBS_ROLES.has(user?.role);
 
   useEffect(() => {
     setJob(initialJob);
@@ -313,18 +328,23 @@ export default function JobFullView({
   // Report → Estimate → Contact → Documents → Time → Financials → Phases → Daily Logs → Details
   // Estimate is visible to Sales (who builds it) + Owner/Ops/Admin.
   // Financials (internal cost/margin) stays restricted to Owner/Ops/Admin.
-  const TABS = [
-    { id: 'report',    label: 'Report',     icon: Sparkles },
-    canSeeEstimate   && { id: 'estimate',   label: 'Estimate',   icon: Receipt },
-    canSeeSubs       && { id: 'subs',       label: 'Subs',       icon: HardHat },
-    canContact       && { id: 'contact',    label: 'Contact',    icon: MessageSquare },
-    { id: 'documents', label: 'Documents',  icon: FolderClosed },
-    { id: 'time',      label: 'Time',       icon: Clock },
-    canSeeFinancials && { id: 'financials', label: 'Financials', icon: DollarSign },
-    { id: 'phases',    label: 'Phases',     icon: HardHat },
-    { id: 'daily',     label: 'Daily Logs', icon: FileText },
-    { id: 'details',   label: 'Details',    icon: Info },
-  ].filter(Boolean);
+  // Receptionist-only view collapses to a single Details tab — Rafaela
+  // doesn't need Report/Documents/Time/Phases/etc. when she's just
+  // checking who the lead is and what they need.
+  const TABS = readOnlyBasic
+    ? [{ id: 'details', label: 'Details', icon: Info }]
+    : [
+        { id: 'report',    label: 'Report',     icon: Sparkles },
+        canSeeEstimate   && { id: 'estimate',   label: 'Estimate',   icon: Receipt },
+        canSeeSubs       && { id: 'subs',       label: 'Subs',       icon: HardHat },
+        canContact       && { id: 'contact',    label: 'Contact',    icon: MessageSquare },
+        { id: 'documents', label: 'Documents',  icon: FolderClosed },
+        { id: 'time',      label: 'Time',       icon: Clock },
+        canSeeFinancials && { id: 'financials', label: 'Financials', icon: DollarSign },
+        { id: 'phases',    label: 'Phases',     icon: HardHat },
+        { id: 'daily',     label: 'Daily Logs', icon: FileText },
+        { id: 'details',   label: 'Details',    icon: Info },
+      ].filter(Boolean);
 
   return (
     <div className="fixed inset-0 z-40 bg-omega-cloud flex flex-col animate-[fadeIn_0.2s_ease-out]">
@@ -583,11 +603,12 @@ export default function JobFullView({
               saving={saving}
               estimate={estimate}
               contract={contract}
-              onOpenEstimateFlow={() => { onOpenEstimateFlow?.(job); onClose?.(); }}
-              onOpenQuestionnaire={onOpenQuestionnaire ? () => { onOpenQuestionnaire(job); onClose?.(); } : null}
-              onDelete={openDeleteModal}
-              onReset={openResetModal}
-              onStartNewJobForClient={onStartNewJobForClient ? () => {
+              readOnlyBasic={readOnlyBasic}
+              onOpenEstimateFlow={readOnlyBasic ? null : () => { onOpenEstimateFlow?.(job); onClose?.(); }}
+              onOpenQuestionnaire={!readOnlyBasic && onOpenQuestionnaire ? () => { onOpenQuestionnaire(job); onClose?.(); } : null}
+              onDelete={readOnlyBasic ? null : openDeleteModal}
+              onReset={readOnlyBasic ? null : openResetModal}
+              onStartNewJobForClient={!readOnlyBasic && onStartNewJobForClient ? () => {
                 onStartNewJobForClient({
                   client_name: job.client_name || '',
                   client_phone: job.client_phone || '',
@@ -712,6 +733,7 @@ export default function JobFullView({
 function DetailsTab({
   job, estimate, contract,
   editing, setEditing, form, setForm, saveEdits, saving,
+  readOnlyBasic = false,
   onOpenEstimateFlow, onOpenQuestionnaire, onDelete, onReset, canReset,
   onStartNewJobForClient, onJobUpdated,
 }) {
@@ -719,37 +741,40 @@ function DetailsTab({
     <div className="space-y-5">
       {/* Client info card */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6">
-        {/* Cover photo — sits above the field grid so the user notices
-            it on first read of the tab. Stays visible whether or not
-            the form is in "edit mode" since the upload widget itself
-            is its own self-contained editor. */}
-        <div className="mb-5 pb-5 border-b border-gray-100">
-          <JobCoverPhotoUpload job={job} onUpdated={onJobUpdated} />
-        </div>
+        {/* Cover photo — hidden for read-only-basic (receptionist) since
+            she shouldn't be uploading job-cover assets. */}
+        {!readOnlyBasic && (
+          <div className="mb-5 pb-5 border-b border-gray-100">
+            <JobCoverPhotoUpload job={job} onUpdated={onJobUpdated} />
+          </div>
+        )}
 
         <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
           <h2 className="text-lg font-bold text-omega-charcoal">Client & Job Info</h2>
-          <div className="flex items-center gap-2">
-            {!editing ? (
-              <>
-                <button onClick={() => setEditing(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
-                  <Edit3 className="w-4 h-4" /> Edit
-                </button>
-                {onOpenQuestionnaire && (
-                  <button onClick={onOpenQuestionnaire} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
-                    <ClipboardEdit className="w-4 h-4" /> Questionnaire
+          {/* Edit / Save controls hidden for read-only-basic. */}
+          {!readOnlyBasic && (
+            <div className="flex items-center gap-2">
+              {!editing ? (
+                <>
+                  <button onClick={() => setEditing(true)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
+                    <Edit3 className="w-4 h-4" /> Edit
                   </button>
-                )}
-              </>
-            ) : (
-              <>
-                <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-semibold">Cancel</button>
-                <button onClick={saveEdits} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60">
-                  <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save Changes'}
-                </button>
-              </>
-            )}
-          </div>
+                  {onOpenQuestionnaire && (
+                    <button onClick={onOpenQuestionnaire} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-charcoal">
+                      <ClipboardEdit className="w-4 h-4" /> Questionnaire
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button onClick={() => setEditing(false)} className="px-3 py-2 rounded-xl border border-gray-200 text-sm font-semibold">Cancel</button>
+                  <button onClick={saveEdits} disabled={saving} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60">
+                    <Save className="w-4 h-4" /> {saving ? 'Saving…' : 'Save Changes'}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {!editing ? (
@@ -844,31 +869,39 @@ function DetailsTab({
           isolated. Reset is for "I tested with this card, wipe the
           estimate so I can use it for the real lead". Delete is the
           nuclear option (drops the row entirely). Both PIN-gated by
-          the Owner PIN inside their respective modals. */}
-      <div className="bg-white rounded-xl border-2 border-red-200 p-4 sm:p-6">
-        <h3 className="text-base font-bold text-red-800 inline-flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" /> Danger Zone
-        </h3>
-        <p className="text-xs text-omega-stone mt-1">
-          These actions require the Owner PIN.
-        </p>
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            onClick={onReset}
-            disabled={!canReset}
-            title={canReset ? 'Wipe estimate, contract draft, questionnaire and AI report — keep the client info.' : 'Cannot reset: job has a signed contract or is in progress.'}
-            className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-amber-300 text-amber-800 hover:bg-amber-50 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <RotateCcw className="w-4 h-4" /> Reset to New Lead
-          </button>
-          <button
-            onClick={onDelete}
-            className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-red-300 text-red-700 hover:bg-red-50 text-sm font-bold"
-          >
-            <Trash2 className="w-4 h-4" /> Delete Job
-          </button>
+          the Owner PIN inside their respective modals. Hidden entirely
+          for read-only-basic (receptionist) since neither callback
+          gets passed in that mode. */}
+      {(onDelete || onReset) && (
+        <div className="bg-white rounded-xl border-2 border-red-200 p-4 sm:p-6">
+          <h3 className="text-base font-bold text-red-800 inline-flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" /> Danger Zone
+          </h3>
+          <p className="text-xs text-omega-stone mt-1">
+            These actions require the Owner PIN.
+          </p>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {onReset && (
+              <button
+                onClick={onReset}
+                disabled={!canReset}
+                title={canReset ? 'Wipe estimate, contract draft, questionnaire and AI report — keep the client info.' : 'Cannot reset: job has a signed contract or is in progress.'}
+                className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-amber-300 text-amber-800 hover:bg-amber-50 text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <RotateCcw className="w-4 h-4" /> Reset to New Lead
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-red-300 text-red-700 hover:bg-red-50 text-sm font-bold"
+              >
+                <Trash2 className="w-4 h-4" /> Delete Job
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

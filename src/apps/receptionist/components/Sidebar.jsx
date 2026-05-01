@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Calendar, UserPlus, List, LogOut } from 'lucide-react';
+import { Calendar, UserPlus, List, LogOut, GitBranch } from 'lucide-react';
 import Logo from './Logo';
 import UserProfileModal from '../../../shared/components/UserProfileModal';
 import Avatar, { colorFromName } from '../../../shared/components/ui/Avatar';
@@ -7,6 +7,7 @@ import { useUserProfile } from '../../../shared/hooks/useUserProfile';
 
 const NAV = [
   { id: 'calendar',  label: 'Calendar',  icon: Calendar  },
+  { id: 'pipeline',  label: 'Pipeline',  icon: GitBranch },
   { id: 'new-lead',  label: 'New Lead',  icon: UserPlus  },
   { id: 'leads',     label: 'My Leads',  icon: List      },
 ];

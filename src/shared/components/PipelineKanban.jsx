@@ -743,7 +743,11 @@ export default function PipelineKanban({
                               <JobCard
                                 job={j}
                                 coiWarning={coiWarningByJob.has(j.id)}
-                                onOpen={readOnly ? () => {} : setOpenJob}
+                                // Read-only roles still open JobFullView so they can SEE
+                                // the card details — JobFullView itself gates which tabs
+                                // and actions render based on user.role. Used by the
+                                // receptionist's read-only kanban view.
+                                onOpen={setOpenJob}
                                 onDelete={setDeleteJob}
                                 canDelete={canDelete}
                                 isDragging={isDragging}

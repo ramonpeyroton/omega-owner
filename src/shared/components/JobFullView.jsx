@@ -22,7 +22,7 @@ import MaterialsSection from './MaterialsSection';
 import JobSubcontractorsSection from './JobSubcontractorsSection';
 import JobCoverPhotoUpload from './JobCoverPhotoUpload';
 import { logAudit } from '../lib/audit';
-import { PIPELINE_STEP_LABEL, PIPELINE_COLORS } from '../config/phaseBreakdown';
+import { PIPELINE_STEP_LABEL, PIPELINE_COLORS, PIPELINE_ORDER } from '../config/phaseBreakdown';
 import { formatPhoneInput, toE164 } from '../lib/phone';
 import { SERVICES, parseJobServices, joinJobServices } from '../data/services';
 
@@ -396,9 +396,24 @@ export default function JobFullView({
         </div>
 
         <div className="px-4 sm:px-6 pb-3 flex items-center gap-2 flex-wrap">
-          <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md ${pipelinePalette.bg} ${pipelinePalette.text}`}>
-            {pipelineLabel}
-          </span>
+          {/* Pipeline status — click to move the job to another phase
+              without having to drag-and-drop on the Kanban. Especially
+              useful for the rightmost phases (Completed / Estimate
+              Rejected) that often sit off-screen on the pipeline. */}
+          {readOnlyBasic ? (
+            <span className={`inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md ${pipelinePalette.bg} ${pipelinePalette.text}`}>
+              {pipelineLabel}
+            </span>
+          ) : (
+            <PipelineStatusPicker
+              currentKey={pipelineKey}
+              user={user}
+              jobId={job.id}
+              onMoved={(updated) => { setJob(updated); onJobUpdated?.(updated); }}
+              palette={pipelinePalette}
+              label={pipelineLabel}
+            />
+          )}
           {job.service && (
             <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-omega-orange text-white">
               {job.service}
@@ -946,6 +961,95 @@ function DetailsTab({
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Pipeline status picker (header badge with dropdown) ───────────
+// The kanban's drag-and-drop is the primary way to move a card across
+// phases, but with 10 columns the rightmost ones (Completed / Estimate
+// Rejected) often sit off-screen. This picker — clickable badge in the
+// JobFullView header — gives a one-click alternative that always
+// works regardless of viewport width, and is the only path for
+// receptionists / readOnlyBasic roles (which we explicitly hide it
+// from at the call site).
+function PipelineStatusPicker({ currentKey, user, jobId, onMoved, palette, label }) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function moveTo(nextKey) {
+    if (nextKey === currentKey) { setOpen(false); return; }
+    setSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from('jobs')
+        .update({ pipeline_status: nextKey })
+        .eq('id', jobId)
+        .select().single();
+      if (error) throw error;
+      onMoved?.(data);
+      logAudit({
+        user, action: 'job.move', entityType: 'job', entityId: jobId,
+        details: { from: currentKey, to: nextKey, source: 'status_picker' },
+      });
+      setOpen(false);
+    } catch (err) {
+      // Surface the failure inline so the user sees something instead
+      // of a silent no-op. Reuses the badge tooltip.
+      console.warn('Failed to move job phase', err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={saving}
+        className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md ${palette.bg} ${palette.text} hover:opacity-90 transition-opacity disabled:opacity-60`}
+        title="Click to move this job to another phase"
+      >
+        {saving ? 'Moving…' : label}
+        <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="currentColor"><path d="M6 8L2 4h8z"/></svg>
+      </button>
+
+      {open && (
+        <>
+          {/* Click-outside catcher — covers the screen below the menu. */}
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-1 z-40 w-56 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+            <div className="px-3 py-2 border-b border-gray-100">
+              <p className="text-[10px] font-bold text-omega-stone uppercase tracking-wider">Move to phase</p>
+            </div>
+            <ul className="max-h-72 overflow-y-auto py-1">
+              {PIPELINE_ORDER.map((key) => {
+                const isActive = key === currentKey;
+                const c = PIPELINE_COLORS[key];
+                return (
+                  <li key={key}>
+                    <button
+                      type="button"
+                      onClick={() => moveTo(key)}
+                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-xs ${
+                        isActive ? 'bg-omega-pale font-bold' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ background: c?.hex || '#6B7280' }}
+                      />
+                      <span className="flex-1 text-omega-charcoal">{PIPELINE_STEP_LABEL[key] || key}</span>
+                      {isActive && <span className="text-[9px] uppercase tracking-wider text-omega-stone">current</span>}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </>
       )}
     </div>
   );

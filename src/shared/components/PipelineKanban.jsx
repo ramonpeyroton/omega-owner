@@ -756,6 +756,20 @@ export default function PipelineKanban({
         // is hovering between two siblings — the closest *edge* wins, so
         // dropping at the top vs bottom of a card is unambiguous.
         collisionDetection={closestCorners}
+        // Auto-scroll: the kanban has 10 columns and the rightmost ones
+        // (Completed / Rejected) are usually off-screen. Without these
+        // explicit thresholds the DroppableColumn's own overflow-y-auto
+        // captures the auto-scroll and the user can't drag a card past
+        // the right edge of the viewport. Threshold 0.15 fires the
+        // horizontal scroll a bit sooner, and the slightly higher
+        // acceleration makes the trip across the kanban quick enough
+        // not to feel like dragging molasses.
+        autoScroll={{
+          enabled: true,
+          threshold: { x: 0.15, y: 0.20 },
+          acceleration: 18,
+          interval: 5,
+        }}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}

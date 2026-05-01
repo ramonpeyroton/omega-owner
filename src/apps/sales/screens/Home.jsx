@@ -6,6 +6,9 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Logo from '../components/Logo';
+import Avatar, { colorFromName } from '../../../shared/components/ui/Avatar';
+import { useUserProfile } from '../../../shared/hooks/useUserProfile';
+import UserProfileModal from '../../../shared/components/UserProfileModal';
 
 // ─── Date helpers ───────────────────────────────────────────────────
 function getGreeting() {
@@ -103,21 +106,43 @@ const NAV_ITEMS = [
 ];
 
 function SalesSidebar({ activeId, onNavigate, user, onLogout }) {
+  const [profileOpen, setProfileOpen] = useState(false);
+  // Pulls the profile photo (and refresh fn for after Edit Profile)
+  // from the same shared hook every other role's sidebar uses, so
+  // Attila's Salesman tile shows his real photo instead of an
+  // initial-on-orange square.
+  const { photoUrl, refresh } = useUserProfile(user);
+  const userName = user?.name || '';
+
   return (
     <aside className="w-56 flex-shrink-0 bg-omega-charcoal flex flex-col min-h-screen">
       <div className="px-5 py-6 border-b border-white/10">
         <Logo size="sm" dark />
       </div>
 
-      <div className="px-5 py-4 border-b border-white/10 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-omega-orange flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-          {(user?.name || 'A').charAt(0).toUpperCase()}
-        </div>
+      <button
+        onClick={() => setProfileOpen(true)}
+        className="px-5 py-4 border-b border-white/10 flex items-center gap-3 text-left hover:bg-white/5 transition cursor-pointer w-full"
+        title="Open my profile"
+      >
+        <Avatar
+          name={userName}
+          photoUrl={photoUrl || undefined}
+          size="sm"
+          color={colorFromName(userName)}
+        />
         <div className="min-w-0">
           <p className="text-[10px] text-omega-stone uppercase tracking-widest font-semibold">Salesman</p>
-          <p className="text-sm font-semibold text-white truncate">{user?.name || '—'}</p>
+          <p className="text-sm font-semibold text-white truncate">{userName || '—'}</p>
         </div>
-      </div>
+      </button>
+
+      <UserProfileModal
+        open={profileOpen}
+        onClose={() => setProfileOpen(false)}
+        user={user}
+        onUserUpdated={refresh}
+      />
 
       <nav className="flex-1 px-3 py-4 space-y-1">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (

@@ -44,6 +44,20 @@ export const PIPELINE_COLUMNS = PIPELINE_ORDER.map((id) => ({
 
 const COLUMN_BY_ID = Object.fromEntries(PIPELINE_COLUMNS.map((c) => [c.id, c]));
 
+// True when there's at least one Slack message on this job's Daily
+// Logs that the current user hasn't seen yet.
+//   slack_last_message_at  : cached on the job row by ProjectChat
+//   lastReadIso            : per-user pointer from daily_log_reads
+// If we never cached a "last message" we treat the chat as silent —
+// no dot. If we have a message but no read pointer, the user has
+// definitely never opened the chat → dot.
+function isJobUnread(job, lastReadIso) {
+  const lastMsg = job?.slack_last_message_at;
+  if (!lastMsg) return false;
+  if (!lastReadIso) return true;
+  return new Date(lastMsg).getTime() > new Date(lastReadIso).getTime();
+}
+
 // Re-sort the jobs array using the same precedence the Supabase query
 // uses on first load: pipeline_position ASC NULLS LAST, then
 // created_at DESC. We need this on the client too because handleDragEnd
@@ -166,7 +180,7 @@ function ServiceBadge({ service, columnHex }) {
 }
 
 // ─── Job Card ─────────────────────────────────────────────────────
-function JobCard({ job, coiWarning, onOpen, onDelete, canDelete, isDragging }) {
+function JobCard({ job, coiWarning, hasUnread = false, onOpen, onDelete, canDelete, isDragging }) {
   const address = [job.address, job.city].filter(Boolean).join(', ');
   // The receptionist tags every lead with how it came in — Houzz, Angi,
   // Google, Referral, etc. Surface that in place of the old generic
@@ -187,6 +201,19 @@ function JobCard({ job, coiWarning, onOpen, onDelete, canDelete, isDragging }) {
     >
       {/* Cover banner — landscape, auto-cropped */}
       <CardCover url={job.cover_photo_url} columnHex={col.hex} />
+
+      {/* Unread Daily Logs dot — small red bubble with an exclamation
+          mark in the top-left of the cover, mirroring native push
+          notifications. Only renders when the current user hasn't
+          opened the chat since the latest Slack message landed. */}
+      {hasUnread && (
+        <span
+          className="absolute top-2 left-2 w-5 h-5 rounded-full bg-red-500 ring-2 ring-white shadow-md flex items-center justify-center text-white text-[11px] font-black leading-none"
+          title="Unread messages in Daily Logs"
+        >
+          !
+        </span>
+      )}
 
       {/* Delete (trash) — top-right, only on hover */}
       {canDelete && !isDragging && (
@@ -328,6 +355,13 @@ export default function PipelineKanban({
   // skip both the order-by and the UPDATE field that mention it.
   const [positionMigrationMissing, setPositionMigrationMissing] = useState(false);
 
+  // Map of job_id → ISO timestamp the current user last opened that
+  // job's Daily Logs. Loaded once on mount (one query for the whole
+  // kanban) so we don't fan out per-card. A job whose
+  // jobs.slack_last_message_at is newer than its read pointer (or
+  // missing entirely) gets a red dot on its card.
+  const [lastReadByJob, setLastReadByJob] = useState({});
+
   const canDelete = !readOnly && CAN_DELETE_JOB.has(user?.role);
 
   // Filters
@@ -383,6 +417,23 @@ export default function PipelineKanban({
       setJobs(sortJobsForKanban(jobsData || []));
       setEstimates(e || []);
       setSubs(s || []);
+      // Load this user's read pointers in a separate query so a missing
+      // migration 030 doesn't take down the whole pipeline. If the
+      // table doesn't exist yet, `error` populates and we just skip
+      // (every card will look "unread"; no functional break).
+      if (user?.name) {
+        try {
+          const { data: reads, error: readsErr } = await supabase
+            .from('daily_log_reads')
+            .select('job_id, last_read_at')
+            .eq('user_name', user.name);
+          if (!readsErr && Array.isArray(reads)) {
+            const map = {};
+            for (const row of reads) map[row.job_id] = row.last_read_at;
+            setLastReadByJob(map);
+          }
+        } catch { /* migration 030 missing — silently skip */ }
+      }
       setAssignments(a || []);
     } catch (err) {
       setToast({ type: 'error', message: 'Failed to load pipeline' });
@@ -757,6 +808,11 @@ export default function PipelineKanban({
                               <JobCard
                                 job={j}
                                 coiWarning={coiWarningByJob.has(j.id)}
+                                // hasUnread tells the card to render the
+                                // small red dot when this user hasn't
+                                // opened Daily Logs since the latest
+                                // Slack message landed.
+                                hasUnread={isJobUnread(j, lastReadByJob[j.id])}
                                 // Read-only roles still open JobFullView so they can SEE
                                 // the card details — JobFullView itself gates which tabs
                                 // and actions render based on user.role. Used by the

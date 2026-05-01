@@ -85,8 +85,38 @@ export default function ProjectChat({ job, user, onJobUpdated }) {
       setError('');
       setNotSetUp(!!data.notSetUp);
       setChannelId(data.channelId || null);
-      setMessages(Array.isArray(data.messages) ? data.messages : []);
+      const msgs = Array.isArray(data.messages) ? data.messages : [];
+      setMessages(msgs);
       setLoading(false);
+      // Cache the newest Slack message timestamp on the job row so the
+      // pipeline kanban can show an unread dot without each card hitting
+      // Slack on its own. Slack timestamps are seconds-with-decimals
+      // strings (e.g. "1717548271.412929") — convert to a Date once.
+      if (msgs.length > 0) {
+        const newestTs = msgs.reduce((acc, m) => {
+          const t = parseFloat(m.ts) || 0;
+          return t > acc ? t : acc;
+        }, 0);
+        if (newestTs > 0) {
+          const newestDate = new Date(newestTs * 1000).toISOString();
+          // Fire-and-forget — non-fatal if it fails (we just keep
+          // showing whatever timestamp the kanban already had).
+          supabase.from('jobs')
+            .update({ slack_last_message_at: newestDate })
+            .eq('id', jobIdRef.current)
+            .then(() => {}, () => {});
+          // And mark the chat as read by THIS user — opening the
+          // Daily Logs tab is what "read" means in this UI.
+          if (user?.name) {
+            supabase.from('daily_log_reads')
+              .upsert(
+                { user_name: user.name, job_id: jobIdRef.current, last_read_at: new Date().toISOString() },
+                { onConflict: 'user_name,job_id' },
+              )
+              .then(() => {}, () => {});
+          }
+        }
+      }
     } catch (err) {
       setError(err?.message || 'Network error.');
       setLoading(false);

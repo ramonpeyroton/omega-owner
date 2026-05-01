@@ -4,55 +4,71 @@
 // at sign time so a future edit to this default can never change the
 // legal record of what someone agreed to.
 //
-// Lifted verbatim from the field "ESTIMATE CHECKLIST" PDF Inácio uses
-// in person, including the CT Truth-In-Lending three-day cancellation
-// notice required by CGS § 42-135a.
-export const DEFAULT_ESTIMATE_DISCLAIMERS = `**DISCLAIMER:** Omega Development may assist clients in coordinating with licensed surveyors; however, we are not responsible for the surveyor's work, scheduling, or delays. Any issues, errors, or costs arising from surveyor services remain solely between the client and the surveyor.
+// Updated 2026-05-01 to the formal "Terms, Conditions & Disclaimer"
+// language Inácio + counsel approved. Replaces the older field-checklist
+// phrasing. The CT Truth-In-Lending three-day cancellation notice
+// (CGS § 42-135a) is preserved verbatim under section 12.
 
-**The price reflected in the estimate is valid for fifteen (15) days only.**
+export const DEFAULT_ESTIMATE_DISCLAIMERS = `**TERMS, CONDITIONS & DISCLAIMER**
 
-**A deposit is necessary to reserve our services.**
+**1. Third-Party Services (Surveyors, Engineers, etc.)**
 
-**Any additional work not listed above will involve a Change Order at an additional charge to be determined by additional scope of work and paid in full prior to the task being executed.**
+Omega Development LLC may, at the Client's request, assist in coordinating third-party professionals, including but not limited to surveyors and engineers. However, Omega Development LLC assumes no responsibility or liability for the performance, accuracy, scheduling, delays, or costs associated with such third-party services. Any disputes or issues arising from these services shall be resolved solely between the Client and the third-party provider.
 
-**For tile work**, our price is based on horizontal off-set, square staggered, brick. For herringbone or any other pattern, the work will be considered as additional.
+**2. Estimate Validity**
 
-**During demolition**, possible damages can occur in opposite walls. In case the client wants us to fix it, we will discuss for repair cost.
+All estimates provided are valid for a period of fifteen (15) calendar days from the date issued. After this period, Omega Development LLC reserves the right to revise pricing.
 
-**If necessary** to remove any fence, sidewalks, or stone walls for machine access, we will discuss additional cost to redo them.
+**3. Deposits & Scheduling**
 
-**The client will be responsible** for any permitting costs and fees.
+A deposit is required to secure scheduling and commencement of work. Work will not be scheduled or initiated until the deposit has been received and cleared.
 
-**Payments by credit card and PayPal will be added 3.5%.**
+**4. Scope of Work & Change Orders**
 
-***We do not install appliances.***
+This estimate is based solely on the scope of work expressly described herein. Any additional work, modifications, or unforeseen conditions not included in the original scope shall require a written change order. All change orders will incur additional costs and must be approved and paid in full prior to the execution of such work.
 
----
+**5. Tile Installation Standards**
 
-**Wire transfer information:**
+Tile installation pricing is based on standard patterns, including horizontal offset, square set, or brick pattern. Any specialty or custom patterns (including but not limited to herringbone, diagonal layouts, or mosaics) will be considered additional work and priced accordingly.
+
+**6. Demolition & Concealed Conditions**
+
+Client acknowledges that demolition and construction activities may reveal or cause damage to concealed or adjacent areas, including but not limited to walls, ceilings, flooring, plumbing, and electrical systems. Omega Development LLC is not responsible for pre-existing conditions or incidental damage resulting from necessary demolition. Repairs to such areas are not included unless specifically stated and will be subject to additional charges.
+
+**7. Site Access & Obstructions**
+
+If removal or alteration of existing structures (including but not limited to fences, sidewalks, landscaping, or stone walls) is required to facilitate access for equipment or materials, such work and subsequent restoration are not included in this estimate and will be billed as additional work upon Client approval.
+
+**8. Permits & Fees**
+
+Client is solely responsible for all permitting costs, application fees, and related expenses unless otherwise agreed in writing. Omega Development LLC may assist in the permitting process; however, no responsibility is assumed for delays or outcomes related to permit approvals or certificate of completion.
+
+**9. Payment Processing Fees**
+
+Payments made by credit card may be subject to a processing fee not to exceed the actual cost of processing the transaction or the maximum amount permitted by applicable law and card network rules. This fee will be disclosed to the Client prior to processing payment. No surcharge will be applied to debit card payments. Alternative payment methods, including ACH, wire transfer, or Zelle, are not subject to processing fees.
+
+**10. Exclusions**
+
+Unless explicitly stated in this agreement, Omega Development LLC does not provide or install appliances.
+
+**11. Limitation of Liability**
+
+To the fullest extent permitted by law, Omega Development LLC shall not be liable for any indirect, incidental, consequential, or special damages, including but not limited to loss of use, loss of value, or delays beyond its reasonable control.
+
+**12. Cancellation Rights**
+
+YOU MAY CANCEL THIS TRANSACTION WITHOUT PENALTY OR OBLIGATION WITHIN THREE (3) BUSINESS DAYS FROM THE DATE OF ACCEPTANCE.
+
+If cancelled within this period, all payments made will be refunded in accordance with applicable law, and any security interest arising from the transaction will be cancelled.
+
+To cancel, the Client must provide written notice to:
 
 Omega Development LLC
-278 Post Road East, 2nd floor
+278 Post Road East, 2nd Floor
 Westport, CT 06880
 
-Bank of America
-Account number: 385032928202
-Routing number: 026009593
+Notice must be delivered or postmarked no later than midnight of the third (3rd) business day following acceptance.
 
-Zelle: 203-321-5099 (INACIO DEOLIVEIRA)
+**13. Acceptance of Terms**
 
----
-
-**By signing this document, the customer agrees to the services and conditions outlined in this document.**
-
-YOU MAY CANCEL THIS TRANSACTION WITHOUT ANY PENALTY OR OBLIGATION WITHIN THREE (3) BUSINESS DAYS FROM THE DATE ABOVE. IF YOU CANCEL, ANY PROPERTY TRADED IN, ANY PAYMENTS MADE BY YOU UNDER THE CONTRACT OR SALE, AND ANY NEGOTIABLE INSTRUMENT EXECUTED BY YOU WILL BE RETURNED WITHIN 10 BUSINESS DAYS FOLLOWING RECEIPT BY THE SELLER OF YOUR CANCELLATION NOTICE, AND ANY SECURITY INTEREST ARISING OUT OF THE TRANSACTION WILL BE CANCELLED.
-
-IF YOU CANCEL, YOU MUST MAKE AVAILABLE TO THE SELLER AT YOUR RESIDENCE, IN SUBSTANTIALLY AS GOOD CONDITION AS WHEN RECEIVED, ANY GOODS DELIVERED TO YOU UNDER THIS CONTRACT OR SALE; OR YOU MAY, IF YOU WISH, COMPLY WITH THE RETURN SHIPMENT OF THE GOODS AT THE SELLER'S EXPENSE AND RISK. IF YOU DO MAKE THE GOODS AVAILABLE TO THE SELLER AND THE SELLER DOES NOT PICK THEM UP WITHIN 20 DAYS OF THE DATE OF YOUR NOTICE OF CANCELLATION, YOU MAY RETAIN OR DISPOSE OF THE GOODS WITHOUT ANY FURTHER OBLIGATION. IF YOU FAIL TO MAKE THE GOODS AVAILABLE TO THE SELLER, OR IF YOU AGREE TO RETURN THE GOODS TO THE SELLER AND FAIL TO DO SO, THEN YOU REMAIN LIABLE FOR PERFORMANCE OF ALL OBLIGATIONS UNDER THE CONTRACT.
-
-TO CANCEL THIS TRANSACTION, MAIL OR DELIVER A SIGNED AND DATED COPY OF THIS CANCELLATION NOTICE OR ANY OTHER WRITTEN NOTICE TO:
-
-Omega Development LLC
-278 Post Rd E - 2nd floor
-Westport, CT 06880
-
-NO LATER THAN MIDNIGHT OF THE THIRD BUSINESS DAY AFTER THE DATE OF THE ACCEPTANCE OF THIS ESTIMATE.`;
+By signing this document, the Client acknowledges that they have read, understood, and agree to all terms, conditions, and provisions outlined herein.`;

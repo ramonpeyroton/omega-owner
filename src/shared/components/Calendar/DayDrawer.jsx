@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X, Plus, MapPin, Clock, Trash2, Edit3, User } from 'lucide-react';
 import {
-  EVENT_KIND_META, formatDateLongCT, formatTimeCT, deleteEvent, canCreateAnyEvent,
+  EVENT_KIND_META, eventDisplayMeta, formatDateLongCT, formatTimeCT, deleteEvent, canCreateAnyEvent,
 } from '../../lib/calendar';
 
 /**
@@ -84,7 +84,10 @@ export default function DayDrawer({ iso, user, onClose, onCreate, onEdit, onChan
 
           <div className="space-y-2">
             {events.map((ev) => {
-              const meta = EVENT_KIND_META[ev.kind] || { label: ev.kind, color: '#6B7280' };
+              // For sales visits, eventDisplayMeta returns the
+              // visit_status color (orange/sky/lime/slate). For other
+              // kinds it falls back to the kind palette.
+              const meta = eventDisplayMeta(ev);
               const starts = new Date(ev.starts_at);
               const ends   = new Date(ev.ends_at);
               return (
@@ -97,8 +100,12 @@ export default function DayDrawer({ iso, user, onClose, onCreate, onEdit, onChan
                         <span
                           className="text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded text-white flex-shrink-0"
                           style={{ background: meta.color }}
+                          title={meta.statusLabel ? `${meta.label} · ${meta.statusLabel}` : meta.label}
                         >
-                          {meta.label}
+                          {/* Show "Cancelled" / "Completed" / "Pending" instead
+                              of "Sales Visit" once the receptionist tagged the
+                              status — way more useful at a glance. */}
+                          {meta.statusLabel || meta.label}
                         </span>
                       </div>
 

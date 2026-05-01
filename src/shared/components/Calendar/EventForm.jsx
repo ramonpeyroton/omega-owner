@@ -3,6 +3,7 @@ import { X, Save, Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import {
   EVENT_KIND_OPTIONS, EVENT_KIND_META,
+  VISIT_STATUS_META, VISIT_STATUS_ORDER, getVisitStatusMeta,
   composeCTDateTime, findConflict, createEvent, updateEvent,
   formatDateLongCT, formatTimeCT,
 } from '../../lib/calendar';
@@ -58,6 +59,11 @@ export default function EventForm({ user, initialIso, initialEvent, prefillJob, 
   const [notes,        setNotes]        = useState(initialEvent?.notes || '');
   const [jobId,        setJobId]        = useState(initialEvent?.job_id || prefillJob?.id || null);
   const [skipNotify,   setSkipNotify]   = useState(false);
+  // Sales-visit status — only meaningful when kind === 'sales_visit'.
+  // Defaults to 'to_do' for new visits. Old rows that predate
+  // migration 029 may not have the column populated; getVisitStatusMeta
+  // falls back to 'to_do' for null/undefined.
+  const [visitStatus,  setVisitStatus]  = useState(initialEvent?.visit_status || 'to_do');
 
   const [saving,       setSaving]       = useState(false);
   const [conflict,     setConflict]     = useState(null);
@@ -145,6 +151,13 @@ export default function EventForm({ user, initialIso, initialEvent, prefillJob, 
         }
       }
 
+      // For sales visits, the persisted color follows the visit_status
+      // so any old read paths (calendar_events.color, etc.) stay in sync
+      // with what the calendar renders. Other kinds keep their kind color.
+      const persistedColor = kind === 'sales_visit'
+        ? getVisitStatusMeta(visitStatus).color
+        : (EVENT_KIND_META[kind]?.color || null);
+
       const payload = {
         kind,
         title: title.trim(),
@@ -156,7 +169,13 @@ export default function EventForm({ user, initialIso, initialEvent, prefillJob, 
         assigned_to_role: assignedTo === 'Attila' ? 'sales' : null,
         location:  location || null,
         notes:     notes    || null,
-        color:     EVENT_KIND_META[kind]?.color || null,
+        color:     persistedColor,
+        // Always write visit_status — the column has a NOT NULL default
+        // of 'to_do' (migration 029) so we mirror that here. Non-visit
+        // events still carry the column but its value is ignored on
+        // render (eventDisplayMeta short-circuits unless kind ===
+        // 'sales_visit').
+        visit_status: kind === 'sales_visit' ? visitStatus : 'to_do',
         created_by_name: user?.name || null,
         created_by_role: user?.role || null,
       };
@@ -252,6 +271,36 @@ export default function EventForm({ user, initialIso, initialEvent, prefillJob, 
               ))}
             </select>
           </Field>
+
+          {/* Visit status — only meaningful when kind === 'sales_visit'.
+              The receptionist tags every visit so the calendar reads at
+              a glance: orange = to do, lime = pending, sky = completed,
+              slate = cancelled. */}
+          {kind === 'sales_visit' && (
+            <Field label="Visit status">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {VISIT_STATUS_ORDER.map((s) => {
+                  const meta = VISIT_STATUS_META[s];
+                  const active = visitStatus === s;
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setVisitStatus(s)}
+                      className={`px-2 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors ${active ? 'text-white' : 'text-omega-charcoal hover:bg-gray-50'}`}
+                      style={{
+                        background: active ? meta.color : 'white',
+                        border: `2px solid ${meta.color}`,
+                      }}
+                      title={meta.label}
+                    >
+                      {meta.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+          )}
 
           {/* Existing-client picker — only when not coming in with a
               prefilled job and not in edit mode. Uses an HTML5 datalist

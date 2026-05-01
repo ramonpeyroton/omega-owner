@@ -21,6 +21,49 @@ export const EVENT_KIND_OPTIONS = Object.entries(EVENT_KIND_META).map(
   ([value, meta]) => ({ value, label: meta.label, color: meta.color })
 );
 
+// ─── Visit status (sales_visit only) ────────────────────────────────
+// Lets the receptionist tag every visit so the calendar reads at a
+// glance. Colors are picked to NOT clash with the other event kinds:
+//   to_do     orange (= sales_visit default)            ↔ no clash
+//   completed sky-500 cyan-blue   (≠ service_day blue   #3B82F6)
+//   pending   lime-700 yellow-grn (≠ job_start  green   #22C55E)
+//   cancelled slate-800 near-black                      ↔ no clash
+//
+// `getVisitStatusMeta` handles the legacy 'scheduled' value some
+// envs may have written — treat it as 'to_do'.
+export const VISIT_STATUS_META = {
+  to_do:     { label: 'To Do',     short: 'TO DO',     color: '#E8732A' },
+  completed: { label: 'Completed', short: 'COMPLETED', color: '#0EA5E9' },
+  pending:   { label: 'Pending',   short: 'PENDING',   color: '#65A30D' },
+  cancelled: { label: 'Cancelled', short: 'CANCELLED', color: '#1F2937' },
+};
+
+export const VISIT_STATUS_ORDER = ['to_do', 'pending', 'completed', 'cancelled'];
+
+export function getVisitStatusMeta(status) {
+  if (!status || status === 'scheduled') return VISIT_STATUS_META.to_do;
+  return VISIT_STATUS_META[status] || VISIT_STATUS_META.to_do;
+}
+
+/**
+ * Return the display color + label for an event. Sales visits override
+ * the kind's color with the visit_status color so the receptionist can
+ * tell at a glance which visits are pending vs completed vs cancelled.
+ * Other kinds (job_start, service_day, etc.) ignore visit_status — the
+ * column exists on every row but only sales_visit consumes it.
+ *
+ * @param {{ kind?: string, visit_status?: string }} ev
+ * @returns {{ color: string, label: string, statusLabel: string|null }}
+ */
+export function eventDisplayMeta(ev) {
+  const kindMeta = EVENT_KIND_META[ev?.kind] || { label: ev?.kind || 'Event', color: '#6B7280' };
+  if (ev?.kind === 'sales_visit') {
+    const s = getVisitStatusMeta(ev.visit_status);
+    return { color: s.color, label: kindMeta.label, statusLabel: s.label };
+  }
+  return { color: kindMeta.color, label: kindMeta.label, statusLabel: null };
+}
+
 // ─── Date helpers (all respect CT timezone) ─────────────────────────
 
 /** Return the local YYYY-MM-DD string for a Date in CT. */

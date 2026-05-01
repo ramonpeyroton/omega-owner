@@ -8,7 +8,7 @@
 import { CalendarCheck, Plus } from 'lucide-react';
 import Card from '../ui/Card';
 import IconChip from '../ui/IconChip';
-import { formatDateLongCT, formatTimeCT, isoDateCT, EVENT_KIND_META } from '../../lib/calendar';
+import { formatDateLongCT, formatTimeCT, isoDateCT, EVENT_KIND_META, eventDisplayMeta } from '../../lib/calendar';
 
 export default function TodayPanel({ events = [], onCreate }) {
   const todayDate = new Date();
@@ -48,7 +48,11 @@ export default function TodayPanel({ events = [], onCreate }) {
       ) : (
         <ul className="space-y-2">
           {todays.map((e) => {
-            const meta = EVENT_KIND_META[e.kind] || { color: '#6B7280', label: e.kind };
+            // Visit_status overrides the color when sales_visit;
+            // otherwise the kind palette wins. Status label is appended
+            // when present so the user reads "Sales Visit · Cancelled"
+            // instead of just "Sales Visit".
+            const meta = eventDisplayMeta(e);
             return (
               <li
                 key={e.id}
@@ -64,6 +68,7 @@ export default function TodayPanel({ events = [], onCreate }) {
                     {e.all_day ? 'All day' : formatTimeCT(new Date(e.starts_at))}
                     {' · '}
                     {meta.label}
+                    {meta.statusLabel && <span className="ml-1" style={{ color: meta.color }}>· {meta.statusLabel}</span>}
                   </p>
                 </div>
               </li>

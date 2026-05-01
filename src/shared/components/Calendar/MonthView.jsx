@@ -13,7 +13,7 @@ import { useMemo } from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react';
 import {
-  buildMonthGrid, formatMonthCT, EVENT_KIND_META, isoDateCT,
+  buildMonthGrid, formatMonthCT, EVENT_KIND_META, eventDisplayMeta, isoDateCT,
 } from '../../lib/calendar';
 import IconChip from '../ui/IconChip';
 
@@ -178,7 +178,10 @@ export default function MonthView({
 
               <div className="mt-1.5 space-y-1">
                 {visible.map((e) => {
-                  const meta = EVENT_KIND_META[e.kind] || { color: '#6B7280', label: e.kind };
+                  // eventDisplayMeta returns the visit_status color when
+                  // the event is a sales_visit; otherwise the kind's
+                  // color. Receptionist tags drive the pill tint.
+                  const meta = eventDisplayMeta(e);
                   const { primary, secondary } = parseEventTitle(e.title, meta.label);
                   return (
                     <DraggablePill key={e.id} event={e} canDrag={canDragEvent(e)}>

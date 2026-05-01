@@ -5,7 +5,7 @@
 // the day drawer.
 
 import { useMemo } from 'react';
-import { isoDateCT, formatTimeCT, EVENT_KIND_META } from '../../lib/calendar';
+import { isoDateCT, formatTimeCT, EVENT_KIND_META, eventDisplayMeta } from '../../lib/calendar';
 import Card from '../ui/Card';
 
 const MONTH_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -39,7 +39,9 @@ export default function UpcomingEvents({ events = [], limit = 5, onPick, onViewA
         <ul className="divide-y divide-gray-100">
           {upcoming.map((e) => {
             const d = new Date(e.starts_at);
-            const meta = EVENT_KIND_META[e.kind] || { color: '#6B7280', label: e.kind };
+            // Same precedence as MonthView: visit_status colors win for
+            // sales_visit; everything else falls back to its kind color.
+            const meta = eventDisplayMeta(e);
             const monthLbl = MONTH_SHORT[d.getMonth()];
             const dayLbl = d.getDate();
             return (

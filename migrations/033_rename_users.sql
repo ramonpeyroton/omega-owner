@@ -78,14 +78,17 @@ UPDATE calendar_events SET created_by_name = 'Gabriel Ramanho'   WHERE created_b
 UPDATE calendar_events SET created_by_name = 'Ramon Peyroton'    WHERE created_by_name = 'Ramon';
 
 -- ╔═══════════════════════════════════════════════════════════════╗
--- ║  job_notes  (migration 031)                                    ║
+-- ║  job_notes                                                     ║
 -- ╚═══════════════════════════════════════════════════════════════╝
-UPDATE job_notes SET user_name = 'Attila Dasilva'    WHERE user_name = 'Attila';
-UPDATE job_notes SET user_name = 'Brenda Dasilva'    WHERE user_name = 'Brenda';
-UPDATE job_notes SET user_name = 'Inacio Deoliveira' WHERE user_name = 'Inacio';
-UPDATE job_notes SET user_name = 'Rafaela Costa'     WHERE user_name = 'Rafaela';
-UPDATE job_notes SET user_name = 'Gabriel Ramanho'   WHERE user_name = 'Gabriel';
-UPDATE job_notes SET user_name = 'Ramon Peyroton'    WHERE user_name = 'Ramon';
+-- The pre-existing job_notes table uses author_name / author_role
+-- (not user_name / user_role — migration 031 was a no-op against
+-- the live schema). Frontend JobNotesPanel was patched to match.
+UPDATE job_notes SET author_name = 'Attila Dasilva'    WHERE author_name = 'Attila';
+UPDATE job_notes SET author_name = 'Brenda Dasilva'    WHERE author_name = 'Brenda';
+UPDATE job_notes SET author_name = 'Inacio Deoliveira' WHERE author_name = 'Inacio';
+UPDATE job_notes SET author_name = 'Rafaela Costa'     WHERE author_name = 'Rafaela';
+UPDATE job_notes SET author_name = 'Gabriel Ramanho'   WHERE author_name = 'Gabriel';
+UPDATE job_notes SET author_name = 'Ramon Peyroton'    WHERE author_name = 'Ramon';
 
 -- ╔═══════════════════════════════════════════════════════════════╗
 -- ║  daily_log_reads  (migration 030)                              ║

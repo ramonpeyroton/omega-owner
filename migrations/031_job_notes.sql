@@ -1,21 +1,24 @@
 -- Migration 031: per-job notes the team writes inside the JobFullView
 -- Details tab. Mirrors the "Notes" card in Ramon's redesign mockup.
 --
+-- IMPORTANT: an earlier (undocumented) version of this table already
+-- exists in production using `body / author_name / author_role`
+-- column names. The frontend (JobNotesPanel) reads/writes those
+-- exact column names. This file matches that schema so a fresh
+-- environment ends up identical to production.
+--
 -- Each row is one note authored by one user. The Details tab renders
 -- the most recent N (sorted by created_at DESC) plus a "+ Add Note"
 -- button that inserts a fresh row.
---
--- Keyed by user_name (not user_id) to match the rest of the PIN-only
--- auth model. When auth-hardening lands, switch to user_id along with
--- the rest of the schema.
 
 CREATE TABLE IF NOT EXISTS job_notes (
-  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id      UUID        NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  user_name   TEXT        NOT NULL,
-  user_role   TEXT,
-  content     TEXT        NOT NULL,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id       UUID        NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  body         TEXT        NOT NULL,
+  author_name  TEXT        NOT NULL,
+  author_role  TEXT,
+  source       TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Hot path: "give me every note for THIS job, newest first."

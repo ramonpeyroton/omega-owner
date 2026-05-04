@@ -1344,11 +1344,16 @@ function JobNotesPanel({ jobId, user, canEdit }) {
     if (!draft.trim()) return;
     setPosting(true);
     try {
+      // Schema check: production job_notes uses author_name /
+      // author_role / body. The migration-031 doc said
+      // user_name/user_role/content; that was a planning typo —
+      // the live table predates that migration. Keep the field
+      // names matching what's in Supabase.
       const { data, error } = await supabase.from('job_notes').insert([{
         job_id: jobId,
-        user_name: user?.name || 'unknown',
-        user_role: user?.role || null,
-        content: draft.trim(),
+        author_name: user?.name || 'unknown',
+        author_role: user?.role || null,
+        body: draft.trim(),
       }]).select().single();
       if (error) throw error;
       setNotes((prev) => [data, ...prev]);
@@ -1418,17 +1423,17 @@ function JobNotesPanel({ jobId, user, canEdit }) {
       ) : (
         <ul className="space-y-2">
           {notes.map((n) => {
-            const initial = (n.user_name || '?').charAt(0).toUpperCase();
+            const initial = (n.author_name || '?').charAt(0).toUpperCase();
             return (
               <li key={n.id} className="flex items-start gap-3 px-4 py-3 rounded-lg bg-omega-cloud">
                 <span className="w-9 h-9 rounded-md bg-omega-orange text-white text-sm font-bold flex items-center justify-center flex-shrink-0">
                   {initial}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-omega-charcoal whitespace-pre-wrap break-words leading-relaxed">{n.content}</p>
+                  <p className="text-sm text-omega-charcoal whitespace-pre-wrap break-words leading-relaxed">{n.body}</p>
                   <p className="text-xs text-omega-stone mt-1.5">
-                    <strong className="text-omega-charcoal">{n.user_name}</strong>
-                    {n.user_role && <span className="text-omega-fog"> · {n.user_role}</span>}
+                    <strong className="text-omega-charcoal">{n.author_name}</strong>
+                    {n.author_role && <span className="text-omega-fog"> · {n.author_role}</span>}
                     <span className="text-omega-fog"> · {new Date(n.created_at).toLocaleString()}</span>
                   </p>
                 </div>

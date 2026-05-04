@@ -7,17 +7,6 @@ import { logAudit } from './shared/lib/audit';
 
 // Hardcoded default PINs. Admin-managed PINs in the `users` table take
 // precedence when available. Admin role is INTENTIONALLY NOT here — admin
-// only logs in through the hidden /admin-x9k2 route.
-const PIN_TO_ROLE = {
-  '3333': 'owner',        // Inácio
-  '4444': 'operations',   // Brenda
-  '1111': 'sales',        // Attila
-  '2222': 'manager',      // Gabriel
-  '5555': 'screen',       // Dash (placeholder)
-  '7777': 'marketing',    // Ramon (placeholder)
-  '9999': 'receptionist', // Front desk
-};
-
 // PINs that are silently rejected in the public login (they work only in
 // the hidden admin login). Keeps admin invisible to casual users.
 const BLOCKED_PINS = new Set(['0000']);
@@ -95,11 +84,10 @@ export default function Login({ onLogin }) {
       }
     }
 
-    // 3. Final fallback: hardcoded PIN_TO_ROLE map for users that
-    // haven't been registered in `users` yet (Inácio with PIN 3333,
-    // Brenda with 4444, etc). Whatever they typed in the field
-    // becomes the displayed name.
-    if (!role) role = PIN_TO_ROLE[pin] || null;
+    // The legacy PIN_TO_ROLE fallback (1111/2222/3333/etc) was
+    // removed once Ramon registered every real user via Admin →
+    // Users. Login now requires an actual users row — the old
+    // simplified PINs no longer authenticate.
 
     if (!role) {
       setLoading(false);

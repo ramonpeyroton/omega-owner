@@ -25,7 +25,7 @@ import { logAudit } from '../lib/audit';
 import { PIPELINE_STEP_LABEL, PIPELINE_COLORS, PIPELINE_ORDER } from '../config/phaseBreakdown';
 import { formatPhoneInput, toE164 } from '../lib/phone';
 import { SERVICES, parseJobServices, joinJobServices } from '../data/services';
-import { validateUserPin } from '../lib/userPin';
+import { validateUserPin, validateOwnerPin } from '../lib/userPin';
 
 // Phases that require a PIN confirmation when moved into via the
 // status picker. Mirrors the kanban's PIN_GATED_PHASES set so both
@@ -234,8 +234,12 @@ export default function JobFullView({
   // job row itself (and the cover photo, materials, documents) so the
   // client/address/contact info isn't typed in twice.
   async function confirmReset() {
-    if (resetPin !== '3333') {
-      setResetPinError('Incorrect PIN. Try again.');
+    // Owner PIN gate — looked up against the users table now (the
+    // hardcoded "3333" was retired once Ramon registered the real
+    // owner row through Admin → Users).
+    const ok = await validateOwnerPin(resetPin);
+    if (!ok) {
+      setResetPinError('Incorrect Owner PIN. Try again.');
       logAudit({
         user, action: 'job.reset.pin_failed', entityType: 'job', entityId: job.id,
         details: { client: job.client_name, attempted_pin_prefix: (resetPin || '').slice(0, 1) + '***' },
@@ -303,13 +307,13 @@ export default function JobFullView({
   }
 
   async function confirmDelete() {
-    // Delete always requires the Owner PIN (3333) — even Brenda has to
-    // type it. The audit log captures which role/person INITIATED the
-    // delete plus the PIN string actually used, so Admin can see who
-    // authorized every deletion.
-    if (deletePin !== '3333') {
-      setDeletePinError('Incorrect PIN. Try again.');
-      // Fire-and-forget attempt log (failed attempts are auditable too)
+    // Delete always requires the Owner PIN — even Brenda has to type
+    // it. We validate against the live users.role='owner' row instead
+    // of the old hardcoded "3333" so changing the owner's PIN through
+    // Admin → Users updates the gate automatically.
+    const ok = await validateOwnerPin(deletePin);
+    if (!ok) {
+      setDeletePinError('Incorrect Owner PIN. Try again.');
       logAudit({
         user, action: 'job.delete.pin_failed', entityType: 'job', entityId: job.id,
         details: { client: job.client_name, attempted_pin_prefix: (deletePin || '').slice(0, 1) + '***' },
@@ -326,8 +330,9 @@ export default function JobFullView({
           client: job.client_name,
           service: job.service,
           pipeline_status: job.pipeline_status,
-          pin_used: '3333',                 // always the owner PIN
-          authorized_by: user?.name || null, // whoever was logged in when the delete happened
+          // We don't store the pin string anymore — validation runs
+          // against users table; logging just records WHO confirmed.
+          authorized_by: user?.name || null,
           authorized_by_role: user?.role || null,
         },
       });

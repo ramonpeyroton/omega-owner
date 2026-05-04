@@ -246,24 +246,37 @@ export default function Home({ user, onNavigate, onLogout }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Attila is the only salesperson at Omega today, and the
+      // historic rows have salesperson_name = NULL — filtering by
+      // name would silently zero out every KPI. Match the same
+      // policy the Pipeline already uses (filterBySalesperson=false
+      // for the Sales role) and load every job. When a second
+      // salesperson is hired we'll narrow this back.
+      const fullName  = (user?.name || '').trim();
+      const firstName = fullName.split(/\s+/)[0] || fullName;
+      const namePrefix = firstName ? `${firstName}%` : '';
+
       try {
         const [jobsResp, estResp, evResp, notifResp] = await Promise.all([
-          // Jobs scoped to this seller. Attila ends up matching everyone
-          // when filterBySalesperson is false in the kanban — here we
-          // intentionally narrow on salesperson_name since the seller's
-          // dashboard should reflect his pipeline.
-          supabase.from('jobs').select('*').eq('salesperson_name', user?.name || ''),
-          // Estimates — load all, narrow client-side to the seller's
-          // jobs. Saves us a server-side join.
+          // ALL jobs (sales = single-seller).
+          supabase.from('jobs').select('*'),
+          // Estimates — load all, narrow client-side later.
           supabase.from('estimates').select('id, job_id, status, total_amount, signed_at, created_at, updated_at'),
-          // Upcoming events for this seller in the next 7 days. The
-          // calendar surfaces sales_visits + meetings primarily.
-          supabase.from('calendar_events')
-            .select('*')
-            .eq('assigned_to_name', user?.name || '')
-            .gte('starts_at', new Date().toISOString())
-            .order('starts_at', { ascending: true })
-            .limit(8),
+          // Upcoming events: still filtered by assignee since the
+          // EventForm reliably writes assigned_to_name. Falls back
+          // to all upcoming events when we have no first name.
+          namePrefix
+            ? supabase.from('calendar_events')
+                .select('*')
+                .ilike('assigned_to_name', namePrefix)
+                .gte('starts_at', new Date().toISOString())
+                .order('starts_at', { ascending: true })
+                .limit(8)
+            : supabase.from('calendar_events')
+                .select('*')
+                .gte('starts_at', new Date().toISOString())
+                .order('starts_at', { ascending: true })
+                .limit(8),
           supabase.from('notifications').select('id', { count: 'exact', head: true }).eq('seen', false),
         ]);
         if (cancelled) return;

@@ -138,27 +138,15 @@ function fmtIsoDate(iso) {
 export function buildContractDocFromDom(rootEl) {
   if (!rootEl) return '';
 
-  // Off-screen mirror at exact Letter content width (7.5in = 8.5in
-  // page minus 0.5in margins each side). We READ computed styles from
-  // this mirror — that way every captured pixel width is sized for the
-  // printed page, not the operator's current viewport. Without this,
-  // serializing a contract on a 1300px-wide window would bake 1300px
-  // widths into the HTML and DocuSign would render off-page.
-  const liveMirror = rootEl.cloneNode(true);
-  liveMirror.style.position = 'absolute';
-  liveMirror.style.left = '-99999px';
-  liveMirror.style.top = '0';
-  liveMirror.style.width = '7.5in';
-  liveMirror.style.maxWidth = '7.5in';
-  liveMirror.style.boxSizing = 'border-box';
-  document.body.appendChild(liveMirror);
-  // Force synchronous layout pass so getComputedStyle reflects 7.5in.
-  void liveMirror.offsetWidth;
-
-  // The clone we'll mutate and serialize. Walked in lockstep with
-  // liveMirror so style reads come from a node that's actually mounted
-  // and laid out at the right width.
-  const clone = liveMirror.cloneNode(true);
+  // Walk the live DOM (already mounted on screen) and build a clone
+  // with computed styles flattened to inline. Earlier we tried mounting
+  // an off-screen 7.5in "mirror" to control width — but the off-screen
+  // positioning hacks (position:absolute; left:-99999px) bled through
+  // into the serialized clone and DocuSign rendered the contract off-
+  // page (blank PDF). The width-skip in copyInlineStyles below already
+  // prevents viewport-pixel widths from leaking into the output; it
+  // makes the mirror redundant.
+  const clone = rootEl.cloneNode(true);
 
   function walk(live, copy) {
     if (!live || !copy || copy.nodeType !== 1) return;
@@ -218,10 +206,7 @@ export function buildContractDocFromDom(rootEl) {
     } catch { /* getComputedStyle can throw in detached/weird contexts */ }
   }
 
-  walk(liveMirror, clone);
-
-  // Drop the mirror — we have what we need.
-  document.body.removeChild(liveMirror);
+  walk(rootEl, clone);
 
   return `<!DOCTYPE html>
 <html>

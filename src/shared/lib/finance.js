@@ -150,6 +150,40 @@ export async function markMilestoneReceived(milestoneId, opts) {
   return updated;
 }
 
+// ─── Mark a milestone's invoice as sent (Estimate Flow step 5) ────
+// Stamps the timestamp and (optionally) the documents row id of the
+// PDF copy saved under folder='invoices'. Resend just calls this
+// again — the timestamp is overwritten. Audited so Brenda can prove
+// when each invoice went out.
+export async function markInvoiceSent(milestoneId, opts) {
+  const { docId, user, isResend } = opts || {};
+  if (!milestoneId) throw new Error('milestoneId required');
+
+  const patch = {
+    invoice_sent_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  if (docId) patch.invoice_doc_id = docId;
+
+  const { data: updated, error } = await supabase
+    .from('payment_milestones')
+    .update(patch)
+    .eq('id', milestoneId)
+    .select()
+    .single();
+  if (error) throw error;
+
+  logAudit({
+    user,
+    action: isResend ? 'invoice.resent' : 'invoice.sent',
+    entityType: 'payment_milestone',
+    entityId: milestoneId,
+    details: { docId: docId || null, contractId: updated.contract_id, jobId: updated.job_id },
+  });
+
+  return updated;
+}
+
 // ─── Reverse: mark a sub payment as paid (we're paying the sub) ───
 export async function ensureSubPaymentsForAgreement(agreement) {
   if (!agreement?.id) throw new Error('agreement is required');

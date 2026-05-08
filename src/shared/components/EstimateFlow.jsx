@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { ArrowLeft, Check, Trash2, Plus, Send, FileText, DollarSign, Lock, Info, MessageSquare, X, Clock, CheckCircle2 } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { ArrowLeft, Check, Trash2, Plus, Send, FileText, DollarSign, Lock, Info, MessageSquare, X, Clock, CheckCircle2, AlertTriangle, RotateCw, PartyPopper } from 'lucide-react';
 import { validateUserPinDetailed } from '../lib/userPin';
 import { supabase } from '../lib/supabase';
 import { createEnvelope, getEnvelopeStatus, downloadSignedDocument } from '../lib/docusign';
@@ -7,6 +7,8 @@ import LoadingSpinner from './LoadingSpinner';
 import Toast from './Toast';
 import StatusBadge from './StatusBadge';
 import ContractTemplate, { buildContractDocFromDom } from './Contract/ContractTemplate';
+import InvoiceTemplate from './Contract/InvoiceTemplate';
+import { ensureMilestonesForContract, markMilestoneReceived, effectiveStatus } from '../lib/finance';
 import { logAudit } from '../lib/audit';
 import { notify } from '../lib/notifications';
 
@@ -89,7 +91,16 @@ export default function EstimateFlow({ job, user, onBack }) {
   const [showChangeModal, setShowChangeModal] = useState(false);
   const [changeText, setChangeText] = useState('');
   const [showManualAdvanceModal, setShowManualAdvanceModal] = useState(false);
-  const [showInvoiceEditor, setShowInvoiceEditor] = useState(false);
+
+  // Step 5 — per-milestone invoicing.
+  const [milestones, setMilestones] = useState([]);
+  const [loadingMilestones, setLoadingMilestones] = useState(false);
+  const [sendingMilestoneId, setSendingMilestoneId] = useState(null);
+  const [confirmResendId, setConfirmResendId] = useState(null);
+  const [companySettings, setCompanySettings] = useState(null);
+  // Off-screen InvoiceTemplate rendered into this ref while we run html2pdf.
+  const invoiceRef = useRef(null);
+  const [pendingInvoiceMilestone, setPendingInvoiceMilestone] = useState(null);
 
   useEffect(() => { loadData(); /* eslint-disable-next-line */ }, [job?.id]);
 
@@ -108,6 +119,11 @@ export default function EstimateFlow({ job, user, onBack }) {
       else if (est?.approved_at) setStep(2);
       else setStep(1);
 
+      // Step 5 prep — milestones + company info, only if signed.
+      if (ctr?.signed_at) {
+        await loadMilestonesAndCompany(ctr);
+      }
+
       // When EstimateFlow opens on a job that still sits at `new_lead`,
       // the estimate is now "in review" — promote to estimate_draft so
       // the kanban reflects that work has started.
@@ -118,6 +134,198 @@ export default function EstimateFlow({ job, user, onBack }) {
       setToast({ type: 'error', message: 'Failed to load estimate data' });
     } finally {
       setLoading(false);
+    }
+  }
+
+  // ─── Step 5 helpers ──────────────────────────────────────────────
+  // Materializes payment_milestones from contract.payment_plan if they
+  // don't exist yet (idempotent) and reloads the rows + the company
+  // info used by the InvoiceTemplate.
+  async function loadMilestonesAndCompany(ctr) {
+    if (!ctr?.id) return;
+    setLoadingMilestones(true);
+    try {
+      try { await ensureMilestonesForContract(ctr); } catch { /* non-fatal */ }
+      const [{ data: ms }, { data: comp }] = await Promise.all([
+        supabase.from('payment_milestones').select('*').eq('contract_id', ctr.id).order('order_idx', { ascending: true }),
+        supabase.from('company_settings').select('*').order('updated_at', { ascending: false }).limit(1).maybeSingle(),
+      ]);
+      setMilestones(ms || []);
+      setCompanySettings(comp || null);
+    } finally {
+      setLoadingMilestones(false);
+    }
+  }
+
+  async function refreshMilestones() {
+    if (!contract?.id) return;
+    const { data } = await supabase
+      .from('payment_milestones')
+      .select('*')
+      .eq('contract_id', contract.id)
+      .order('order_idx', { ascending: true });
+    const next = data || [];
+    setMilestones(next);
+    // If everything has been received → flag the job as completed and
+    // notify the team. Idempotent on `pipeline_status` so a Brenda
+    // mistake-then-undo doesn't spam.
+    const allPaid = next.length > 0 && next.every((m) => m.status === 'paid');
+    if (allPaid && job.pipeline_status !== 'completed') {
+      try {
+        await supabase.from('jobs').update({ pipeline_status: 'completed' }).eq('id', job.id);
+        logAudit({ user, action: 'pipeline.complete', entityType: 'job', entityId: job.id, details: { reason: 'all_milestones_paid' } });
+        notify({ recipientRole: 'owner',      title: 'Job completed', message: `${job.client_name || 'Client'} — all installments received.`, type: 'finance', jobId: job.id });
+        notify({ recipientRole: 'operations', title: 'Job completed', message: `${job.client_name || 'Client'} — final installment received.`, type: 'finance', jobId: job.id });
+      } catch { /* non-fatal */ }
+    }
+  }
+
+  async function updateMilestoneDueDate(milestoneId, due_date) {
+    try {
+      const { error } = await supabase
+        .from('payment_milestones')
+        .update({ due_date: due_date || null, updated_at: new Date().toISOString() })
+        .eq('id', milestoneId);
+      if (error) throw error;
+      setMilestones((prev) => prev.map((m) => m.id === milestoneId ? { ...m, due_date: due_date || null } : m));
+    } catch (err) {
+      setToast({ type: 'error', message: err.message || 'Could not save due date' });
+    }
+  }
+
+  // Lazy-load html2pdf from CDN — same approach as ContractTemplate.
+  async function loadHtml2Pdf() {
+    if (window.html2pdf) return window.html2pdf;
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+      s.onload = () => resolve(window.html2pdf);
+      s.onerror = () => reject(new Error('Could not load html2pdf.js from CDN'));
+      document.head.appendChild(s);
+    });
+  }
+
+  async function generateInvoicePdfBlob(milestone) {
+    setPendingInvoiceMilestone(milestone);
+    // Two animation frames + a small grace period so React commits the
+    // hidden render and the browser settles layout before html2pdf
+    // measures it. Same pattern as resendTestEnvelope.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await new Promise((r) => setTimeout(r, 80));
+
+    const node = invoiceRef.current;
+    if (!node) {
+      setPendingInvoiceMilestone(null);
+      throw new Error('Invoice template did not mount — try again in a second.');
+    }
+    const html2pdf = await loadHtml2Pdf();
+    const blob = await html2pdf()
+      .set({
+        margin: [0.5, 0.5, 0.6, 0.5],
+        image: { type: 'jpeg', quality: 0.95 },
+        html2canvas: { scale: 2, useCORS: true, letterRendering: true, backgroundColor: '#ffffff' },
+        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
+      })
+      .from(node)
+      .outputPdf('blob');
+
+    setPendingInvoiceMilestone(null);
+    return blob;
+  }
+
+  async function handleSendMilestoneInvoice(milestone, isResend = false) {
+    if (!perms.canSendInvoice) {
+      setToast({ type: 'warning', message: 'Only Operations or Owner can send invoices' });
+      return;
+    }
+    if (!job.client_email) {
+      setToast({ type: 'error', message: 'Client has no email on file — add one in the job card.' });
+      return;
+    }
+    if (!milestone.due_date && !isResend) {
+      setToast({ type: 'warning', message: 'Set a due date for this installment first.' });
+      return;
+    }
+    setSendingMilestoneId(milestone.id);
+    try {
+      const blob = await generateInvoicePdfBlob(milestone);
+      const safeClient = (job.client_name || 'client').replace(/[^a-zA-Z0-9-]/g, '_').slice(0, 40);
+      const safeLabel  = (milestone.label || `installment-${milestone.order_idx + 1}`).replace(/[^a-zA-Z0-9-]/g, '_').slice(0, 30);
+      const filename   = `invoice-${safeClient}-${safeLabel}-${Date.now()}.pdf`;
+      const path       = `${job.id}/invoices/${filename}`;
+
+      const { error: upErr } = await supabase.storage
+        .from('job-documents')
+        .upload(path, blob, { upsert: true, contentType: 'application/pdf' });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from('job-documents').getPublicUrl(path);
+      const pdfUrl = pub?.publicUrl;
+      if (!pdfUrl) throw new Error('Could not get public URL for the uploaded invoice.');
+
+      // job_documents row only on first send so we don't pile up
+      // duplicates on every resend.
+      let docId = milestone.invoice_doc_id || null;
+      if (!docId) {
+        const { data: doc, error: docErr } = await supabase
+          .from('job_documents')
+          .insert([{
+            job_id: job.id,
+            folder: 'invoices',
+            title: `Invoice — ${milestone.label || `Installment ${milestone.order_idx + 1}`}`,
+            photo_url: pdfUrl,
+            uploaded_by: user?.name || null,
+          }])
+          .select().single();
+        if (docErr) throw docErr;
+        docId = doc.id;
+      }
+
+      const r = await fetch('/api/send-invoice', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Omega-Role': user?.role || '',
+          'X-Omega-User': user?.name || '',
+        },
+        body: JSON.stringify({ milestoneId: milestone.id, pdfUrl, docId, isResend }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data?.ok) throw new Error(data?.error || `Send failed (HTTP ${r.status})`);
+
+      logAudit({
+        user,
+        action: isResend ? 'invoice.resent' : 'invoice.sent',
+        entityType: 'payment_milestone',
+        entityId: milestone.id,
+        details: { jobId: job.id, milestoneLabel: milestone.label, amount: milestone.due_amount, docId },
+      });
+      setToast({ type: 'success', message: isResend ? 'Invoice re-sent to client' : 'Invoice sent to client' });
+      await refreshMilestones();
+      setConfirmResendId(null);
+    } catch (err) {
+      setToast({ type: 'error', message: err.message || 'Failed to send invoice' });
+    } finally {
+      setSendingMilestoneId(null);
+    }
+  }
+
+  async function handleMarkMilestoneReceived(milestone) {
+    if (!perms.canSendInvoice) {
+      setToast({ type: 'warning', message: 'Only Operations or Owner can mark received' });
+      return;
+    }
+    const remaining = Number(milestone.due_amount || 0) - Number(milestone.received_amount || 0);
+    if (remaining <= 0) return;
+    try {
+      await markMilestoneReceived(milestone.id, {
+        amount: remaining,
+        date: new Date().toISOString(),
+        user,
+      });
+      setToast({ type: 'success', message: 'Marked as received' });
+      await refreshMilestones();
+    } catch (err) {
+      setToast({ type: 'error', message: err.message || 'Could not mark as received' });
     }
   }
 
@@ -341,6 +549,7 @@ export default function EstimateFlow({ job, user, onBack }) {
         setContract(data);
         if (!wasSigned && data.status === 'signed') {
           setStep(5);
+          await loadMilestonesAndCompany(data);
           logAudit({ user, action: 'contract.sign', entityType: 'contract', entityId: data.id, details: { job_id: job.id } });
           notify({ recipientRole: 'owner', title: 'Contract signed', message: `${job.client_name || 'Client'} signed — $${Number(data.total_amount || 0).toLocaleString()}`, type: 'contract', jobId: job.id });
           notify({ recipientRole: 'operations', title: 'Contract signed', message: `${job.client_name || 'Client'} — deposit invoice is next.`, type: 'contract', jobId: job.id });
@@ -375,30 +584,6 @@ export default function EstimateFlow({ job, user, onBack }) {
       setToast({ type: 'error', message: err.message || 'Could not download PDF' });
     } finally {
       setDownloadingPdf(false);
-    }
-  }
-
-  async function sendDepositInvoice(invoiceData) {
-    if (!perms.canSendInvoice) { setToast({ type: 'warning', message: 'Only Operations or Owner can send the deposit invoice' }); return; }
-    if (!contract) return;
-    setSaving(true);
-    try {
-      const patch = {
-        deposit_invoice_sent_at: new Date().toISOString(),
-        deposit_amount: invoiceData.depositAmount != null ? Number(invoiceData.depositAmount) : contract.deposit_amount,
-        invoice_due_date: invoiceData.dueDate || null,
-        invoice_notes: invoiceData.notes || null,
-      };
-      const { data, error } = await supabase.from('contracts').update(patch).eq('id', contract.id).select().single();
-      if (error) throw error;
-      setContract(data);
-      setShowInvoiceEditor(false);
-      logAudit({ user, action: 'contract.invoice_sent', entityType: 'contract', entityId: data.id, details: { job_id: job.id, deposit: data.deposit_amount } });
-      setToast({ type: 'success', message: 'Deposit invoice sent' });
-    } catch (err) {
-      setToast({ type: 'error', message: err.message || 'Failed to send invoice' });
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -662,64 +847,41 @@ export default function EstimateFlow({ job, user, onBack }) {
 
         {/* STEP 5 — Invoice & Deposit */}
         {step === 5 && (
-          <section className="bg-white rounded-xl border border-gray-200 p-6">
-            <h2 className="text-lg font-bold text-omega-charcoal mb-4">Invoice & Deposit</h2>
-
-            {!contract?.signed_at ? (
-              <p className="text-sm text-omega-warning">Contract must be signed before sending the deposit invoice.</p>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                  <div className="p-4 rounded-lg bg-omega-cloud">
-                    <p className="text-xs text-omega-stone uppercase font-semibold">Contract Total</p>
-                    <p className="text-lg font-bold text-omega-charcoal mt-1">${Number(contract.total_amount || 0).toLocaleString()}</p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-omega-cloud">
-                    <p className="text-xs text-omega-stone uppercase font-semibold">Deposit</p>
-                    <p className="text-lg font-bold text-omega-charcoal mt-1">${Number(contract.deposit_amount || 0).toLocaleString()}</p>
-                  </div>
-                  <div className="p-4 rounded-lg bg-omega-cloud">
-                    <p className="text-xs text-omega-stone uppercase font-semibold">Signed</p>
-                    <p className="text-lg font-bold text-omega-charcoal mt-1">{new Date(contract.signed_at).toLocaleDateString()}</p>
-                  </div>
-                </div>
-
-                {!perms.canSendInvoice && (
-                  <div className="mb-4 flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
-                    <Info className="w-4 h-4 text-blue-700 mt-0.5" />
-                    <p className="text-sm text-blue-900">The deposit invoice will be sent by the Operations team.</p>
-                  </div>
-                )}
-
-                {contract.deposit_invoice_sent_at ? (
-                  <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-omega-cloud text-sm font-semibold text-omega-success">
-                    <Check className="w-4 h-4" />
-                    Invoice sent {new Date(contract.deposit_invoice_sent_at).toLocaleDateString()}
-                  </div>
-                ) : perms.canSendInvoice ? (
-                  <button
-                    onClick={() => setShowInvoiceEditor(true)}
-                    className="px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold inline-flex items-center gap-2"
-                  >
-                    <FileText className="w-4 h-4" /> Review & Send Invoice
-                  </button>
-                ) : null}
-              </>
-            )}
-          </section>
+          <Step5Invoices
+            contract={contract}
+            job={job}
+            user={user}
+            perms={perms}
+            milestones={milestones}
+            loading={loadingMilestones}
+            sendingMilestoneId={sendingMilestoneId}
+            confirmResendId={confirmResendId}
+            onConfirmResendChange={setConfirmResendId}
+            onSend={handleSendMilestoneInvoice}
+            onMarkReceived={handleMarkMilestoneReceived}
+            onUpdateDueDate={updateMilestoneDueDate}
+          />
         )}
       </div>
 
-      {showInvoiceEditor && contract && (
-        <InvoiceEditorModal
-          contract={contract}
-          job={job}
-          paymentPlan={paymentPlan}
-          saving={saving}
-          onClose={() => setShowInvoiceEditor(false)}
-          onSend={(data) => sendDepositInvoice(data)}
-        />
-      )}
+      {/* Off-screen InvoiceTemplate — html2pdf renders this DOM. */}
+      <div
+        aria-hidden="true"
+        style={{ position: 'fixed', left: -10000, top: 0, opacity: 0, pointerEvents: 'none' }}
+      >
+        {pendingInvoiceMilestone && (
+          <InvoiceTemplate
+            ref={invoiceRef}
+            job={job}
+            estimate={estimate}
+            contract={contract}
+            company={companySettings}
+            milestone={pendingInvoiceMilestone}
+            installmentNumber={(milestones.findIndex((m) => m.id === pendingInvoiceMilestone.id) + 1) || 1}
+            totalInstallments={milestones.length || 1}
+          />
+        )}
+      </div>
 
       {showManualAdvanceModal && (
         <ManualAdvancePinModal
@@ -736,6 +898,7 @@ export default function EstimateFlow({ job, user, onBack }) {
               logAudit({ user, action: 'contract.manual_sign', entityType: 'contract', entityId: contract.id, details: { job_id: job.id } });
               setShowManualAdvanceModal(false);
               setStep(5);
+              await loadMilestonesAndCompany(data);
               setToast({ type: 'success', message: 'Contract marked as signed — advancing to Invoice.' });
             } catch (err) {
               setToast({ type: 'error', message: err.message || 'Failed to advance' });
@@ -849,117 +1012,241 @@ const PIN_ERRORS = {
   query_failed:  'Network error — try again.',
 };
 
-function InvoiceEditorModal({ contract, job, paymentPlan, saving, onClose, onSend }) {
-  const today = new Date().toISOString().split('T')[0];
-  const [depositAmount, setDepositAmount] = useState(
-    contract.deposit_amount != null ? String(contract.deposit_amount) : ''
-  );
-  const [dueDate, setDueDate] = useState('');
-  const [notes, setNotes] = useState('');
+// ─── Step 5: Per-installment invoicing ───────────────────────────
+// One row per `payment_milestones` entry. Each row gets:
+//   * Editable due_date (Brenda must set this before sending).
+//   * Send button — generates PDF (html2pdf), uploads, emails. Locks
+//     to `Sent {date}` after the first click; a separate Resend
+//     button (with double-click confirmation) sits next to it.
+//   * Mark Received — full-amount mark for the common case; partial /
+//     account selection still happens in the Finance area.
+// When every row is `paid`, the parent flips pipeline_status to
+// 'completed' and we show the celebration block instead of the list.
+function Step5Invoices({
+  contract, job, perms, milestones, loading,
+  sendingMilestoneId, confirmResendId, onConfirmResendChange,
+  onSend, onMarkReceived, onUpdateDueDate,
+}) {
+  const allPaid = milestones.length > 0 && milestones.every((m) => m.status === 'paid');
+  const sentCount = milestones.filter((m) => !!m.invoice_sent_at).length;
+  const paidCount = milestones.filter((m) => m.status === 'paid').length;
 
-  const total = Number(contract.total_amount || 0);
+  if (!contract?.signed_at) {
+    return (
+      <section className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-lg font-bold text-omega-charcoal mb-4">Invoice & Deposit</h2>
+        <p className="text-sm text-omega-warning">Contract must be signed before sending invoices.</p>
+      </section>
+    );
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-          <div>
-            <h3 className="text-base font-bold text-omega-charcoal">Deposit Invoice</h3>
-            <p className="text-xs text-omega-stone mt-0.5">{job.client_name} — review before sending</p>
-          </div>
-          <button onClick={onClose} className="text-omega-stone hover:text-omega-charcoal">
-            <X className="w-5 h-5" />
-          </button>
+    <section className="bg-white rounded-xl border border-gray-200 p-6">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+        <h2 className="text-lg font-bold text-omega-charcoal">Invoice &amp; Deposit</h2>
+        {milestones.length > 0 && (
+          <p className="text-xs text-omega-stone">
+            {sentCount} of {milestones.length} sent · {paidCount} of {milestones.length} received
+          </p>
+        )}
+      </div>
+
+      {/* Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div className="p-4 rounded-lg bg-omega-cloud">
+          <p className="text-xs text-omega-stone uppercase font-semibold">Contract Total</p>
+          <p className="text-lg font-bold text-omega-charcoal mt-1">${Number(contract.total_amount || 0).toLocaleString()}</p>
         </div>
-
-        {/* Body */}
-        <div className="px-6 py-5 space-y-4">
-          {/* Summary cards */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="p-3 rounded-lg bg-omega-cloud">
-              <p className="text-xs text-omega-stone uppercase font-semibold">Contract Total</p>
-              <p className="text-base font-bold text-omega-charcoal mt-0.5">${total.toLocaleString()}</p>
-            </div>
-            <div className="p-3 rounded-lg bg-omega-cloud">
-              <p className="text-xs text-omega-stone uppercase font-semibold">Signed</p>
-              <p className="text-base font-bold text-omega-charcoal mt-0.5">
-                {contract.signed_at ? new Date(contract.signed_at).toLocaleDateString() : '—'}
-              </p>
-            </div>
-          </div>
-
-          {/* Payment plan summary */}
-          {paymentPlan.length > 0 && (
-            <div className="rounded-lg border border-gray-100 overflow-hidden">
-              <div className="px-3 py-2 bg-gray-50 text-xs font-semibold text-omega-stone uppercase">Payment Plan</div>
-              {paymentPlan.map((p, i) => {
-                const amt = p.amount
-                  ? Number(p.amount)
-                  : p.percent ? Math.round(total * Number(p.percent) / 100 * 100) / 100 : 0;
-                return (
-                  <div key={i} className="flex items-center justify-between px-3 py-2 border-t border-gray-100 text-sm">
-                    <span className="text-omega-slate">{p.label || `Installment ${i + 1}`}</span>
-                    <span className="font-semibold text-omega-charcoal">${amt.toLocaleString()}{p.percent ? ` (${p.percent}%)` : ''}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Editable fields */}
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-omega-stone uppercase mb-1">Deposit Amount</label>
-              <div className="relative">
-                <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-omega-stone" />
-                <input
-                  type="number"
-                  value={depositAmount}
-                  onChange={(e) => setDepositAmount(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-omega-orange"
-                  placeholder="0.00"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-omega-stone uppercase mb-1">Due Date</label>
-              <input
-                type="date"
-                value={dueDate}
-                min={today}
-                onChange={(e) => setDueDate(e.target.value)}
-                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-omega-orange"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-omega-stone uppercase mb-1">Notes / Payment Instructions</label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                placeholder="e.g. Please make check payable to Omega Development LLC, or bank transfer to…"
-                className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-omega-orange resize-none"
-              />
-            </div>
-          </div>
+        <div className="p-4 rounded-lg bg-omega-cloud">
+          <p className="text-xs text-omega-stone uppercase font-semibold">Signed</p>
+          <p className="text-lg font-bold text-omega-charcoal mt-1">{new Date(contract.signed_at).toLocaleDateString()}</p>
         </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-semibold text-omega-slate hover:bg-gray-50">
-            Cancel
-          </button>
-          <button
-            onClick={() => onSend({ depositAmount: depositAmount || contract.deposit_amount, dueDate, notes })}
-            disabled={saving}
-            className="px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold disabled:opacity-60 inline-flex items-center gap-2"
-          >
-            <Send className="w-4 h-4" />
-            {saving ? 'Sending…' : 'Send Invoice'}
-          </button>
+        <div className="p-4 rounded-lg bg-omega-cloud">
+          <p className="text-xs text-omega-stone uppercase font-semibold">Installments</p>
+          <p className="text-lg font-bold text-omega-charcoal mt-1">{milestones.length || '—'}</p>
         </div>
       </div>
-    </div>
+
+      {!perms.canSendInvoice && (
+        <div className="mb-4 flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
+          <Info className="w-4 h-4 text-blue-700 mt-0.5" />
+          <p className="text-sm text-blue-900">Invoices are sent by the Operations team.</p>
+        </div>
+      )}
+
+      {allPaid ? (
+        <div className="rounded-2xl border-2 border-omega-success bg-green-50 p-8 flex flex-col items-center text-center gap-3">
+          <PartyPopper className="w-12 h-12 text-omega-success" />
+          <p className="text-xl font-bold text-omega-success">Job Completed</p>
+          <p className="text-sm text-omega-slate max-w-md">
+            All installments have been received. The job has been moved to <strong>Completed</strong> on the pipeline.
+          </p>
+        </div>
+      ) : loading ? (
+        <p className="text-sm text-omega-stone py-8 text-center">Loading installments…</p>
+      ) : milestones.length === 0 ? (
+        <p className="text-sm text-omega-warning py-8 text-center">
+          No installments found yet. The DocuSign webhook materializes them on signing — try refreshing in a few seconds.
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-omega-stone uppercase text-xs tracking-wider border-b border-gray-200">
+              <tr>
+                <th className="px-3 py-2 text-left w-10">#</th>
+                <th className="px-3 py-2 text-left">Installment</th>
+                <th className="px-3 py-2 text-right">Amount</th>
+                <th className="px-3 py-2 text-left">Due Date</th>
+                <th className="px-3 py-2 text-center">Status</th>
+                <th className="px-3 py-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {milestones.map((m, idx) => (
+                <MilestoneRow
+                  key={m.id}
+                  index={idx + 1}
+                  milestone={m}
+                  perms={perms}
+                  isSending={sendingMilestoneId === m.id}
+                  isConfirmingResend={confirmResendId === m.id}
+                  onConfirmResendChange={onConfirmResendChange}
+                  onSend={onSend}
+                  onMarkReceived={onMarkReceived}
+                  onUpdateDueDate={onUpdateDueDate}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function MilestoneRow({
+  index, milestone, perms, isSending, isConfirmingResend,
+  onConfirmResendChange, onSend, onMarkReceived, onUpdateDueDate,
+}) {
+  const status = effectiveStatus(milestone);
+  const isFirst = index === 1;
+  const sentAt = milestone.invoice_sent_at ? new Date(milestone.invoice_sent_at) : null;
+  const remaining = Number(milestone.due_amount || 0) - Number(milestone.received_amount || 0);
+  const isPaid = milestone.status === 'paid';
+  const canSend = perms.canSendInvoice && !!milestone.due_date && !isSending && !isPaid;
+
+  const statusPill = isPaid ? (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-800 text-xs font-semibold">
+      <CheckCircle2 className="w-3 h-3" /> Received
+    </span>
+  ) : milestone.status === 'partial' ? (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold">
+      Partial
+    </span>
+  ) : status === 'overdue' ? (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-800 text-xs font-semibold">
+      <AlertTriangle className="w-3 h-3" /> Overdue
+    </span>
+  ) : sentAt ? (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-semibold">
+      Sent
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold">
+      Pending
+    </span>
+  );
+
+  return (
+    <tr className="align-middle">
+      <td className="px-3 py-3 text-omega-stone text-xs font-mono">{index}</td>
+      <td className="px-3 py-3">
+        <div className="font-semibold text-omega-charcoal">
+          {milestone.label || `Installment ${index}`}
+          {isFirst && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-omega-orange/10 text-omega-orange tracking-wider">Deposit</span>}
+        </div>
+        {sentAt && (
+          <div className="text-xs text-omega-stone mt-0.5">
+            Sent {sentAt.toLocaleDateString()}
+          </div>
+        )}
+      </td>
+      <td className="px-3 py-3 text-right font-semibold text-omega-charcoal tabular-nums whitespace-nowrap">
+        ${Number(milestone.due_amount || 0).toLocaleString()}
+      </td>
+      <td className="px-3 py-3">
+        <input
+          type="date"
+          value={milestone.due_date || ''}
+          onChange={(e) => onUpdateDueDate(milestone.id, e.target.value)}
+          disabled={!perms.canSendInvoice || isPaid}
+          className="px-2 py-1.5 rounded-lg border border-gray-200 text-xs focus:outline-none focus:border-omega-orange disabled:bg-gray-50 disabled:text-omega-stone"
+        />
+      </td>
+      <td className="px-3 py-3 text-center">{statusPill}</td>
+      <td className="px-3 py-3">
+        <div className="flex items-center justify-end gap-2 flex-wrap">
+          {/* Send / Sent display */}
+          {sentAt ? (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-omega-success">
+              <Check className="w-3.5 h-3.5" /> Sent
+            </span>
+          ) : (
+            <button
+              onClick={() => onSend(milestone, false)}
+              disabled={!canSend}
+              title={!milestone.due_date ? 'Set a due date first' : ''}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-omega-orange hover:bg-omega-dark text-white text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Send className="w-3.5 h-3.5" /> {isSending ? 'Sending…' : 'Send'}
+            </button>
+          )}
+
+          {/* Resend (only after a first send, with double-click confirm) */}
+          {sentAt && perms.canSendInvoice && !isPaid && (
+            isConfirmingResend ? (
+              <span className="inline-flex items-center gap-1">
+                <button
+                  onClick={() => onSend(milestone, true)}
+                  disabled={isSending}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold disabled:opacity-60"
+                >
+                  <RotateCw className="w-3.5 h-3.5" /> {isSending ? 'Resending…' : 'Confirm resend'}
+                </button>
+                <button
+                  onClick={() => onConfirmResendChange(null)}
+                  className="px-2 py-1.5 rounded-lg text-omega-stone hover:bg-gray-100 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => onConfirmResendChange(milestone.id)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 text-xs font-semibold"
+                title="Re-send the invoice email to the client"
+              >
+                <RotateCw className="w-3.5 h-3.5" /> Resend
+              </button>
+            )
+          )}
+
+          {/* Received */}
+          {isPaid ? (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-omega-success">
+              <Check className="w-3.5 h-3.5" /> Received
+            </span>
+          ) : (
+            <button
+              onClick={() => onMarkReceived(milestone)}
+              disabled={!perms.canSendInvoice || remaining <= 0}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-omega-success hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" /> Received
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
   );
 }

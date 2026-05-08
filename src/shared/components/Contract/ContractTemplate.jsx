@@ -133,7 +133,9 @@ function fmtIsoDate(iso) {
 // (so DocuSign's renderer doesn't need our stylesheet), and the
 // signature image keeps its relative URL — the server replaces it with
 // a base64 data URL before forwarding to DocuSign.
-function buildContractDocFromDom(rootEl) {
+// Exported so EstimateFlow can re-serialize the contract from the
+// Awaiting Signature step (one-click resend for testing).
+export function buildContractDocFromDom(rootEl) {
   if (!rootEl) return '';
 
   // Off-screen mirror at exact Letter content width (7.5in = 8.5in

@@ -6,7 +6,7 @@ import { createEnvelope, getEnvelopeStatus, downloadSignedDocument } from '../li
 import LoadingSpinner from './LoadingSpinner';
 import Toast from './Toast';
 import StatusBadge from './StatusBadge';
-import ContractTemplate from './Contract/ContractTemplate';
+import ContractTemplate, { buildContractDocFromDom } from './Contract/ContractTemplate';
 import { logAudit } from '../lib/audit';
 import { notify } from '../lib/notifications';
 
@@ -301,6 +301,32 @@ export default function EstimateFlow({ job, user, onBack }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  // Test convenience: re-issue the envelope from the Awaiting Signature
+  // step without walking the full Review→Approve→PaymentPlan wizard
+  // again. Switches to step 3 so ContractTemplate mounts, waits a beat
+  // for layout, then serializes the freshly-rendered DOM and creates a
+  // brand-new envelope (DB row + DocuSign send) via the same code path
+  // the regular Send button uses.
+  async function resendTestEnvelope() {
+    if (!perms.canSendContract) {
+      setToast({ type: 'warning', message: 'You do not have permission to send contracts' });
+      return;
+    }
+    setStep(3);
+    // Two animation frames + a small grace period so React commits the
+    // step change, the template mounts, and the browser settles layout.
+    // Without this the contract DOM isn't measurable yet.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const root = document.querySelector('.contract-doc');
+    if (!root) {
+      setToast({ type: 'error', message: 'Contract template still loading — try again in a second.' });
+      return;
+    }
+    const html = buildContractDocFromDom(root);
+    await generateAndSendContract(html);
   }
 
   async function refreshContractStatus() {
@@ -610,6 +636,17 @@ export default function EstimateFlow({ job, user, onBack }) {
                     className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 hover:border-omega-orange text-sm font-semibold text-omega-stone hover:text-omega-charcoal transition-colors"
                   >
                     <Lock className="w-4 h-4" /> Mark as Signed Manually
+                  </button>
+                )}
+
+                {perms.canSendContract && (
+                  <button
+                    onClick={resendTestEnvelope}
+                    disabled={saving}
+                    title="Re-issue a fresh DocuSign envelope from the current contract template — for testing layout/anchor changes without redoing the whole flow."
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-omega-orange/40 hover:border-omega-orange text-sm font-semibold text-omega-orange hover:bg-omega-pale transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Send className="w-4 h-4" /> {saving ? 'Resending…' : 'Resend Test Envelope'}
                   </button>
                 )}
               </div>

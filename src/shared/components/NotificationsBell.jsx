@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Bell, X, Check } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { recipientRolesFor } from '../lib/notifications';
+import { recipientRolesFor, renderNotificationText } from '../lib/notifications';
 
 export default function NotificationsBell({ user, dark = false }) {
   const [items, setItems] = useState([]);
@@ -22,7 +22,9 @@ export default function NotificationsBell({ user, dark = false }) {
       const roles = recipientRolesFor(user?.role);
       let query = supabase
         .from('notifications')
-        .select('*')
+        // Join the linked job so renderNotificationText can swap the
+        // baked client_name for the current one (audit #9).
+        .select('*, jobs(client_name)')
         .order('created_at', { ascending: false })
         .limit(30);
       if (roles) query = query.in('recipient_role', roles);
@@ -104,7 +106,10 @@ export default function NotificationsBell({ user, dark = false }) {
                       {unread && <span className="w-2 h-2 rounded-full bg-omega-orange mt-1.5 flex-shrink-0" />}
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-sm text-omega-charcoal">{n.title || '—'}</p>
-                        {n.message && <p className="text-xs text-omega-slate mt-0.5">{n.message}</p>}
+                        {(() => {
+                          const text = renderNotificationText(n);
+                          return text ? <p className="text-xs text-omega-slate mt-0.5">{text}</p> : null;
+                        })()}
                         <p className="text-[10px] text-omega-stone mt-1">
                           {n.created_at ? new Date(n.created_at).toLocaleString() : ''}
                           {n.type && ` · ${n.type}`}

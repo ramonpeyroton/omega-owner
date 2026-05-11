@@ -4,7 +4,7 @@ import {
   AlertCircle, Clock, Eye, Filter,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { recipientRolesFor } from '../../../shared/lib/notifications';
+import { recipientRolesFor, renderNotificationText } from '../../../shared/lib/notifications';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 // Per-type visual treatment. Picks an icon + tinted card so Attila
@@ -199,12 +199,18 @@ export default function Notifications({ onNavigate, user }) {
                           {n.title}
                         </p>
                       )}
-                      {/* Body — wraps freely */}
-                      {n.message && (
-                        <p className="text-[12.5px] text-omega-slate mt-0.5 leading-snug">
-                          {n.message}
-                        </p>
-                      )}
+                      {/* Body — rendered through renderNotificationText so
+                          new-style {type, payload} rows surface live data
+                          and old-style rows keep working from `message`. */}
+                      {(() => {
+                        const text = renderNotificationText(n);
+                        if (!text) return null;
+                        return (
+                          <p className="text-[12.5px] text-omega-slate mt-0.5 leading-snug">
+                            {text}
+                          </p>
+                        );
+                      })()}
                     </div>
 
                     {isUnread && (

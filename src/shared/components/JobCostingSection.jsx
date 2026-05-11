@@ -34,6 +34,11 @@ export default function JobCostingSection({ job, user }) {
   // away from the current estimate. The form value is still authoritative
   // for the math; this is just a banner.
   const [latestEstimateTotal, setLatestEstimateTotal] = useState(null);
+  // Milestone count — when > 0, amount_received is computed by the
+  // database trigger from SUM(payment_milestones.received_amount).
+  // The form field is read-only in that case so Brenda doesn't type
+  // a value that would be silently overwritten on the next change.
+  const [milestoneCount, setMilestoneCount] = useState(0);
   const saveTimer = useRef(null);
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [job?.id]);
@@ -67,6 +72,16 @@ export default function JobCostingSection({ job, user }) {
       const subs = (agrs || []).reduce((acc, a) => acc + (Number(a.their_estimate) || 0), 0);
       setSubsTotal(subs);
       setLatestEstimateTotal(est?.total_amount ?? null);
+
+      // Are there payment milestones for this job? If yes, the
+      // amount_received column is owned by the trigger.
+      try {
+        const { count } = await supabase
+          .from('payment_milestones')
+          .select('id', { count: 'exact', head: true })
+          .eq('job_id', job.id);
+        setMilestoneCount(count || 0);
+      } catch { setMilestoneCount(0); }
 
       setRow(cost || null);
       setForm({
@@ -217,7 +232,12 @@ export default function JobCostingSection({ job, user }) {
             label="Amount Received from Client"
             value={form.amount_received}
             onChange={(v) => update('amount_received', v)}
-            helper={calc.revenue > 0 ? `Balance due: ${money(calc.balanceDue)}` : null}
+            helper={
+              milestoneCount > 0
+                ? `Auto-synced from ${milestoneCount} Finance milestone${milestoneCount === 1 ? '' : 's'} — mark received in Finance to update.`
+                : (calc.revenue > 0 ? `Balance due: ${money(calc.balanceDue)}` : null)
+            }
+            readOnly={milestoneCount > 0}
             highlight
           />
         </div>
@@ -261,7 +281,7 @@ function Card({ label, value, icon: Icon, valueColor = 'text-omega-charcoal' }) 
   );
 }
 
-function Field({ label, value, onChange, helper, onSync, highlight }) {
+function Field({ label, value, onChange, helper, onSync, highlight, readOnly }) {
   return (
     <div>
       <label className={`text-xs font-semibold uppercase ${highlight ? 'text-emerald-600' : 'text-omega-stone'}`}>{label}</label>
@@ -271,8 +291,9 @@ function Field({ label, value, onChange, helper, onSync, highlight }) {
           type="number"
           step="0.01"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className={`w-full pl-9 pr-20 py-2.5 rounded-lg border text-base ${highlight ? 'border-emerald-300 bg-emerald-50 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-200' : 'border-gray-200'}`}
+          readOnly={readOnly}
+          onChange={(e) => !readOnly && onChange(e.target.value)}
+          className={`w-full pl-9 pr-20 py-2.5 rounded-lg border text-base ${readOnly ? 'bg-gray-50 text-omega-stone cursor-not-allowed border-gray-200' : (highlight ? 'border-emerald-300 bg-emerald-50 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-200' : 'border-gray-200')}`}
           placeholder="0.00"
           inputMode="decimal"
         />

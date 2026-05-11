@@ -57,6 +57,11 @@ export default function FinanceScreen({ user }) {
   const [tab, setTab] = useState('clients');
   const [accounts, setAccounts] = useState([]);
   const [accountsOpen, setAccountsOpen] = useState(false);
+  // Bumping this re-mounts the active tab so it re-fetches from
+  // Supabase. The tabs themselves load on mount only — without this,
+  // edits in another browser tab / surface aren't reflected until you
+  // navigate away and back. Audit #10.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const TABS = useMemo(
     () => ALL_TABS.filter((t) => !t.ghostOnly || GHOST_TAB_ROLES.has(user?.role)),
@@ -86,13 +91,22 @@ export default function FinanceScreen({ user }) {
               Control receivables, sub payments and print your QB report.
             </p>
           </div>
-          <button
-            onClick={() => setAccountsOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange hover:text-omega-orange text-sm font-semibold text-omega-charcoal"
-          >
-            <Banknote className="w-4 h-4" /> Bank Accounts
-            <span className="ml-1 text-[11px] text-omega-stone">({accounts.length})</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setRefreshNonce((n) => n + 1); loadAccounts(); }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange hover:text-omega-orange text-sm font-semibold text-omega-charcoal"
+              title="Reload everything from Supabase"
+            >
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+            <button
+              onClick={() => setAccountsOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-200 hover:border-omega-orange hover:text-omega-orange text-sm font-semibold text-omega-charcoal"
+            >
+              <Banknote className="w-4 h-4" /> Bank Accounts
+              <span className="ml-1 text-[11px] text-omega-stone">({accounts.length})</span>
+            </button>
+          </div>
         </div>
 
         <nav className="mt-5 flex gap-1 border-b border-gray-100 -mb-6">
@@ -113,10 +127,10 @@ export default function FinanceScreen({ user }) {
       </header>
 
       <div className="p-6 md:p-8">
-        {tab === 'company' && <CompanyTab user={user} />}
-        {tab === 'clients' && <ClientsTab user={user} accounts={accounts} />}
-        {tab === 'subs'    && <SubsTab    user={user} accounts={accounts} />}
-        {tab === 'ghost'   && GHOST_TAB_ROLES.has(user?.role) && <GhostAccountTab user={user} />}
+        {tab === 'company' && <CompanyTab key={`co-${refreshNonce}`} user={user} />}
+        {tab === 'clients' && <ClientsTab key={`cl-${refreshNonce}`} user={user} accounts={accounts} />}
+        {tab === 'subs'    && <SubsTab    key={`sb-${refreshNonce}`} user={user} accounts={accounts} />}
+        {tab === 'ghost'   && GHOST_TAB_ROLES.has(user?.role) && <GhostAccountTab key={`gh-${refreshNonce}`} user={user} />}
       </div>
 
       {accountsOpen && (

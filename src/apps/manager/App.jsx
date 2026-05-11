@@ -14,9 +14,18 @@ import JobFullView from '../../shared/components/JobFullView';
 import PipelineKanban from '../../shared/components/PipelineKanban';
 import { useBackNavHome } from '../../shared/lib/backNav';
 
+// On a phone, Gabriel lands straight on Receipts so his one-thumb use
+// case (snap a material receipt) doesn't need any taps to reach. On
+// tablet/desktop he keeps the original "Today" home — that screen is
+// designed for the bigger viewport. Matches `md` Tailwind breakpoint.
+function defaultInitialScreen() {
+  if (typeof window === 'undefined') return 'today';
+  return window.matchMedia('(max-width: 768px)').matches ? 'receipts' : 'today';
+}
+
 export default function App({ user, onLogout }) {
-  // Gabriel lands on Job of the Day — his "what's happening now" screen.
-  const [screen, setScreen] = useState('today');
+  // Phone → Receipts. Tablet/desktop → Job of the Day.
+  const [screen, setScreen] = useState(defaultInitialScreen);
   const [selectedJob, setSelectedJob] = useState(null);
   const [selectedPhases, setSelectedPhases] = useState([]);
   const [darkMode, setDarkMode] = useState(false);

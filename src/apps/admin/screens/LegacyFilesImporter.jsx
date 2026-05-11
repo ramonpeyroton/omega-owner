@@ -16,7 +16,7 @@
 //      in `other` so nothing is lost.
 //   5. Audit row per uploaded file. Permanent tool — not one-shot.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FolderInput, Upload, Loader2, CheckCircle2, AlertTriangle, Folder,
   ChevronRight, RefreshCw, FileText, Users, X, ArrowRight,
@@ -163,12 +163,16 @@ export default function LegacyFilesImporter({ user }) {
   }
   useEffect(() => { reloadJobs(); }, []);
 
-  // Directory-picker attributes are non-standard so React would emit a
-  // warning if we passed them as JSX props. Set them imperatively.
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.setAttribute('webkitdirectory', '');
-      inputRef.current.setAttribute('directory', '');
+  // Callback ref — sets `webkitdirectory` + `directory` the moment the
+  // <input> mounts. A regular useEffect doesn't work here because the
+  // input only renders after the jobs list finishes loading, which
+  // happens AFTER the mount effect already ran with a null ref.
+  const setInputRef = useCallback((el) => {
+    inputRef.current = el;
+    if (el) {
+      el.setAttribute('webkitdirectory', '');
+      el.setAttribute('directory', '');
+      el.setAttribute('mozdirectory', '');
     }
   }, []);
 
@@ -396,7 +400,7 @@ export default function LegacyFilesImporter({ user }) {
 └── …`}
                 </pre>
                 <input
-                  ref={inputRef}
+                  ref={setInputRef}
                   type="file"
                   multiple
                   hidden

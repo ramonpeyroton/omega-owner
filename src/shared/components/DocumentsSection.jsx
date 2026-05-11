@@ -3,6 +3,7 @@ import {
   FileText, FileSignature, FileBadge, Home, CheckSquare, Receipt,
   Plus, X, Save, Loader2, AlertCircle, ImageIcon, ExternalLink, Trash2, Mic,
   DollarSign, Layers, FolderClosed, FolderInput, Check, ShieldCheck,
+  Search, ChevronDown,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/audit';
@@ -73,6 +74,9 @@ export default function DocumentsSection({ job, user, onJobUpdated, onEditEstima
   const [viewer, setViewer]       = useState(null);
   const [pendingDeleteEstId, setPendingDeleteEstId] = useState(null);
   const [movingDocId, setMovingDocId] = useState(null);
+  const [query, setQuery] = useState('');
+  // Folders the user has expanded ("show more") in this session.
+  const [expandedFolders, setExpandedFolders] = useState(() => new Set());
 
   useEffect(() => {
     if (!job?.id) return;
@@ -228,15 +232,48 @@ export default function DocumentsSection({ job, user, onJobUpdated, onEditEstima
     return arr;
   })();
 
+  // Search filter — matches against title + uploaded_by + folder label.
+  // Empty string returns the original list unchanged so the rest of
+  // the render path stays simple.
+  const normQuery = query.trim().toLowerCase();
+  const matchesQuery = (d, folderLabel) => {
+    if (!normQuery) return true;
+    const hay = `${d.title || ''} ${d.uploaded_by || ''} ${folderLabel || ''}`.toLowerCase();
+    return hay.includes(normQuery);
+  };
+  const PREVIEW_COUNT = 7;
+
   return (
     <div className="space-y-5">
+      {/* Search bar — filters folder contents across every folder card.
+          Lives at the top so it sticks visually with the section header. */}
+      <div className="relative">
+        <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-omega-stone pointer-events-none" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search documents by name, uploader, or folder…"
+          className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-gray-200 bg-white text-sm focus:outline-none focus:border-omega-orange"
+        />
+        {query && (
+          <button
+            onClick={() => setQuery('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-omega-stone hover:bg-gray-100"
+            aria-label="Clear search"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
       {/* Estimates — one row per row, grouped by proposal (group_id). A
           lone estimate renders as a single-row group; alternatives sit
           together under an "Option N of M" chip so the audit trail is
           obvious: what was sent, what the customer rejected, what was
           signed. */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-gray-200 bg-gray-100 flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-omega-pale flex items-center justify-center">
             <DollarSign className="w-4 h-4 text-omega-orange" />
           </div>
@@ -358,7 +395,7 @@ export default function DocumentsSection({ job, user, onJobUpdated, onEditEstima
                   dropdown when the document was the last row in the folder
                   (notably the case in 'Other'). Header gets explicit
                   rounded-t-xl so the corners still look right. */}
-              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 rounded-t-xl flex items-center gap-2">
+              <div className="px-4 py-3 border-b border-gray-200 bg-gray-100 rounded-t-xl flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-omega-pale flex items-center justify-center">
                   <Icon className="w-4 h-4 text-omega-orange" />
                 </div>
@@ -387,12 +424,26 @@ export default function DocumentsSection({ job, user, onJobUpdated, onEditEstima
                 />
               )}
 
+              {(() => {
+                const filtered = f.items.filter((d) => matchesQuery(d, f.label));
+                const expanded = expandedFolders.has(f.id);
+                // When searching we show every match (and ignore truncation).
+                // Otherwise we show PREVIEW_COUNT and offer a "Show N more"
+                // button that flips the folder into expanded mode.
+                const isTruncated = !normQuery && !expanded && filtered.length > PREVIEW_COUNT;
+                const visible = isTruncated ? filtered.slice(0, PREVIEW_COUNT) : filtered;
+                const hiddenCount = filtered.length - visible.length;
+                return (
               <div className="divide-y divide-gray-100">
                 {loading && <p className="px-4 py-3 text-xs text-omega-stone">Loading…</p>}
-                {!loading && f.items.length === 0 && !isAdding && (
-                  <p className="px-4 py-5 text-xs text-omega-stone italic text-center">No documents in this folder yet.</p>
+                {!loading && filtered.length === 0 && !isAdding && (
+                  <p className="px-4 py-5 text-xs text-omega-stone italic text-center">
+                    {normQuery
+                      ? <>No matches for &quot;<strong>{normQuery}</strong>&quot; in this folder.</>
+                      : 'No documents in this folder yet.'}
+                  </p>
                 )}
-                {f.items.map((d) => {
+                {visible.map((d) => {
                   const isPdf = d.photo_url?.toLowerCase().includes('.pdf');
                   const isMoving = movingDocId === d.id;
                   return (
@@ -457,7 +508,24 @@ export default function DocumentsSection({ job, user, onJobUpdated, onEditEstima
                   </div>
                   );
                 })}
+                {(isTruncated || (expanded && filtered.length > PREVIEW_COUNT)) && (
+                  <button
+                    onClick={() => setExpandedFolders((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
+                      return next;
+                    })}
+                    className="w-full px-4 py-2.5 flex items-center justify-center gap-1.5 text-xs font-bold text-omega-orange hover:bg-omega-pale transition-colors"
+                  >
+                    {expanded
+                      ? <>Show fewer <ChevronDown className="w-3.5 h-3.5 rotate-180" /></>
+                      : <>Show {hiddenCount} more <ChevronDown className="w-3.5 h-3.5" /></>
+                    }
+                  </button>
+                )}
               </div>
+                );
+              })()}
             </div>
           );
         })}

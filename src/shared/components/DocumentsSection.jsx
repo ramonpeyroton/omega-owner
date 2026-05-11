@@ -353,8 +353,12 @@ export default function DocumentsSection({ job, user, onJobUpdated, onEditEstima
           const Icon = f.icon;
           const isAdding = addingTo === f.id;
           return (
-            <div key={f.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center gap-2">
+            <div key={f.id} className="bg-white rounded-xl border border-gray-200">
+              {/* No overflow-hidden on the card — it was clipping the MoveMenu
+                  dropdown when the document was the last row in the folder
+                  (notably the case in 'Other'). Header gets explicit
+                  rounded-t-xl so the corners still look right. */}
+              <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 rounded-t-xl flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-omega-pale flex items-center justify-center">
                   <Icon className="w-4 h-4 text-omega-orange" />
                 </div>

@@ -363,6 +363,21 @@ export default function LegacyFilesImporter({ user }) {
 
   return (
     <div className="flex-1 overflow-auto bg-omega-cloud">
+      {/* Mounted unconditionally so the directory-picker attributes are
+          applied long before the user clicks Choose folder. Keeping it
+          inside the conditional caused the dialog to open in file-mode
+          on first load because the ref wasn't set yet. */}
+      <input
+        ref={setInputRef}
+        type="file"
+        // eslint-disable-next-line react/no-unknown-property
+        webkitdirectory=""
+        // eslint-disable-next-line react/no-unknown-property
+        directory=""
+        multiple
+        hidden
+        onChange={onFolderPicked}
+      />
       <header className="px-6 md:px-8 py-5 bg-white border-b border-gray-200 sticky top-0 z-10">
         <h1 className="text-xl font-bold text-omega-charcoal flex items-center gap-2">
           <FolderInput className="w-5 h-5 text-omega-orange" /> Legacy Files Importer
@@ -399,13 +414,6 @@ export default function LegacyFilesImporter({ user }) {
 │   └── contract-signed.pdf
 └── …`}
                 </pre>
-                <input
-                  ref={setInputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  onChange={onFolderPicked}
-                />
                 <div className="flex items-center justify-center gap-2 flex-wrap">
                   <button
                     onClick={() => inputRef.current?.click()}

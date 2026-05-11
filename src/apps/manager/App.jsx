@@ -5,6 +5,7 @@ import PunchList from './screens/PunchList';
 import Notifications from './screens/Notifications';
 import Warehouse from './screens/Warehouse';
 import JobOfTheDay from './screens/JobOfTheDay';
+import QuickReceipts from './screens/QuickReceipts';
 import Sidebar from './components/Sidebar';
 import JarvisChat from '../../shared/components/JarvisChat';
 import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
@@ -61,6 +62,10 @@ export default function App({ user, onLogout }) {
 
     if (screen === 'materials-run') {
       return <MaterialsRun user={user} />;
+    }
+
+    if (screen === 'receipts') {
+      return <QuickReceipts user={user} />;
     }
 
     if (screen === 'dashboard')

@@ -20,12 +20,21 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.SUPABASE_URL || '';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_URL   = process.env.SUPABASE_URL || '';
+const SUPABASE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_FROM    = process.env.RESEND_FROM || 'Omega Development <office@omeganyct.com>';
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false } })
   : null;
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function money(n) {
+  return `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+}
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -232,6 +241,65 @@ export default async function handler(req, res) {
       { recipient_role: 'operations', title, message, type: 'estimate_approved', job_id: estimate.job_id, read: false },
     ]);
   } catch { /* ignore */ }
+
+  // Email Omega's main inbox so Brenda + the salesperson see the
+  // signature confirmation immediately. We use the same Resend
+  // transport as send-estimate.js and silently skip if the env vars
+  // aren't set so this never blocks the signing flow.
+  if (RESEND_API_KEY) {
+    try {
+      const { data: full } = await supabase
+        .from('estimates')
+        .select('estimate_number, total_amount, sent_by, option_label')
+        .eq('id', estimate_id)
+        .maybeSingle();
+      const { data: job } = await supabase
+        .from('jobs')
+        .select('client_name, address, salesperson_name')
+        .eq('id', estimate.job_id)
+        .maybeSingle();
+      const { data: company } = await supabase
+        .from('company_settings').select('*')
+        .order('updated_at', { ascending: false }).limit(1).maybeSingle();
+
+      const to = company?.email;
+      if (to) {
+        const clientName = job?.client_name || signed_by || 'Client';
+        const estNum     = full?.estimate_number ? ` (#${full.estimate_number})` : '';
+        const subject = `✅ ${clientName} signed the estimate${estNum}`;
+        const totalLine  = full?.total_amount ? `<tr><td style="padding:6px 0;color:#6b6b6b;width:32%;">Total</td><td style="padding:6px 0;font-weight:700;">${money(full.total_amount)}</td></tr>` : '';
+        const optionLine = full?.option_label ? `<tr><td style="padding:6px 0;color:#6b6b6b;">Chose option</td><td style="padding:6px 0;">${escapeHtml(full.option_label)}</td></tr>` : '';
+        const projectLine = job?.address ? `<tr><td style="padding:6px 0;color:#6b6b6b;">Project</td><td style="padding:6px 0;">${escapeHtml(job.address)}</td></tr>` : '';
+        const sellerLine = (job?.salesperson_name || full?.sent_by) ? `<tr><td style="padding:6px 0;color:#6b6b6b;">Salesperson</td><td style="padding:6px 0;">${escapeHtml(job?.salesperson_name || full?.sent_by)}</td></tr>` : '';
+        const when = new Date(signed_at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+
+        const html = `<!doctype html>
+<html><body style="margin:0;padding:24px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#2C2C2A;">
+  <div style="max-width:520px;margin:0 auto;background:white;padding:24px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.05);">
+    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#22c55e;font-weight:800;">Estimate signed</div>
+    <h1 style="font-size:22px;margin:6px 0 16px;font-weight:900;">${escapeHtml(clientName)} signed${estNum}</h1>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      ${projectLine}
+      ${totalLine}
+      ${optionLine}
+      ${sellerLine}
+      <tr><td style="padding:6px 0;color:#6b6b6b;">Signed at</td><td style="padding:6px 0;">${escapeHtml(when)}</td></tr>
+      <tr><td style="padding:6px 0;color:#6b6b6b;">Signed by</td><td style="padding:6px 0;">${escapeHtml(signed_by || '—')}</td></tr>
+    </table>
+    <p style="font-size:11px;color:#888;margin:20px 0 0;text-align:center;">
+      Heads-up only. Operations will follow up to prepare the contract.
+    </p>
+  </div>
+</body></html>`;
+
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: RESEND_FROM, to: [to], subject, html }),
+        });
+      }
+    } catch { /* silent — signing already succeeded */ }
+  }
 
   return json(res, 200, { ok: true, signed_at, signed_by, signed_date, rejected_siblings });
 }

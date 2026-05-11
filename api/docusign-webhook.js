@@ -25,6 +25,86 @@ const supabase = createClient(
 
 const DS_BASE_URL  = (process.env.DOCUSIGN_BASE_URL || 'https://demo.docusign.net/restapi').replace(/\/$/, '');
 const DS_ACCOUNT_ID = process.env.DOCUSIGN_ACCOUNT_ID || '';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESEND_FROM    = process.env.RESEND_FROM || 'Omega Development <office@omeganyct.com>';
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+function money(n) {
+  return `$${(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+}
+
+// Fires a "X signed the contract" email to company_settings.email so
+// Brenda + the salesperson know immediately when DocuSign returns
+// completed. Silently no-ops if RESEND_API_KEY isn't configured. The
+// `kind` arg drives the subject ("contract" vs "subcontractor
+// agreement") so the same helper works for both flows.
+async function notifyOmegaOfSigning({ kind, row, signedAt }) {
+  if (!RESEND_API_KEY) return;
+  try {
+    const { data: company } = await supabase
+      .from('company_settings').select('*')
+      .order('updated_at', { ascending: false }).limit(1).maybeSingle();
+    const to = company?.email;
+    if (!to) return;
+
+    let clientName = '—', address = '', salesperson = '', totalAmount = null;
+    if (kind === 'contract') {
+      const { data: job } = await supabase
+        .from('jobs').select('client_name, address, salesperson_name')
+        .eq('id', row.job_id).maybeSingle();
+      clientName = job?.client_name || 'Client';
+      address = job?.address || '';
+      salesperson = job?.salesperson_name || '';
+      totalAmount = row.total_amount;
+    } else {
+      const { data: sub } = await supabase
+        .from('subcontractors').select('name, contact_name')
+        .eq('id', row.subcontractor_id).maybeSingle();
+      const { data: job } = await supabase
+        .from('jobs').select('client_name, address').eq('id', row.job_id).maybeSingle();
+      clientName = sub?.contact_name || sub?.name || 'Sub';
+      address = job?.address || '';
+      totalAmount = row.their_estimate || row.total_amount;
+    }
+
+    const subject = kind === 'contract'
+      ? `✅ ${clientName} signed the contract`
+      : `✅ ${clientName} signed the sub agreement`;
+    const heading = kind === 'contract'
+      ? `${clientName} signed the contract`
+      : `Sub ${clientName} signed the agreement`;
+    const accentLabel = kind === 'contract' ? 'Contract signed' : 'Sub agreement signed';
+    const totalLine = totalAmount ? `<tr><td style="padding:6px 0;color:#6b6b6b;width:32%;">Amount</td><td style="padding:6px 0;font-weight:700;">${money(totalAmount)}</td></tr>` : '';
+    const projectLine = address ? `<tr><td style="padding:6px 0;color:#6b6b6b;">Project</td><td style="padding:6px 0;">${escapeHtml(address)}</td></tr>` : '';
+    const sellerLine = salesperson ? `<tr><td style="padding:6px 0;color:#6b6b6b;">Salesperson</td><td style="padding:6px 0;">${escapeHtml(salesperson)}</td></tr>` : '';
+    const when = new Date(signedAt || Date.now()).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+
+    const html = `<!doctype html>
+<html><body style="margin:0;padding:24px;background:#f5f5f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#2C2C2A;">
+  <div style="max-width:520px;margin:0 auto;background:white;padding:24px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.05);">
+    <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#22c55e;font-weight:800;">${accentLabel}</div>
+    <h1 style="font-size:22px;margin:6px 0 16px;font-weight:900;">${escapeHtml(heading)}</h1>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      ${projectLine}
+      ${totalLine}
+      ${sellerLine}
+      <tr><td style="padding:6px 0;color:#6b6b6b;">Signed at</td><td style="padding:6px 0;">${escapeHtml(when)}</td></tr>
+    </table>
+    <p style="font-size:11px;color:#888;margin:20px 0 0;text-align:center;">
+      ${kind === 'contract' ? 'Signed PDF is saving to Documents → Contracts. Payment milestones materialized.' : 'Payment plan materialized in Finance → Subs.'}
+    </p>
+  </div>
+</body></html>`;
+
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: RESEND_FROM, to: [to], subject, html }),
+    });
+  } catch { /* silent */ }
+}
 
 // After a contract is signed, download the PDF from DocuSign and save it
 // to Supabase Storage so it appears in Documents → Contracts automatically.
@@ -166,6 +246,8 @@ export default async function handler(req, res) {
         // Download the signed PDF and save it to Documents → Contracts so
         // the team can access it at any time without going through DocuSign.
         await downloadAndSaveSignedContract({ ...contract, ...patch });
+        // Email Omega's main inbox with a simple confirmation.
+        await notifyOmegaOfSigning({ kind: 'contract', row: { ...contract, ...patch }, signedAt: patch.signed_at });
       }
 
       res.status(200).json({ ok: true, kind: 'contract' });
@@ -200,6 +282,7 @@ export default async function handler(req, res) {
         } catch (err) {
           console.warn('[docusign-webhook] sub_payments materialization failed:', err?.message);
         }
+        await notifyOmegaOfSigning({ kind: 'agreement', row: { ...agr, ...patch }, signedAt: patch.signed_at });
       }
 
       res.status(200).json({ ok: true, kind: 'agreement' });

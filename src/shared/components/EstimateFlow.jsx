@@ -63,9 +63,135 @@ export function parsePlanFromMessage(message) {
   return out;
 }
 
+// Returns a stable string fingerprint of a payment plan so we can
+// detect "do these plans differ?" with a simple === comparison.
+// Compares the percent breakdown, not the dollar amounts (because
+// amounts scale with the estimate total — only the percent split
+// matters when deciding "is this plan structurally the same?").
+function planFingerprint(plan) {
+  if (!Array.isArray(plan) || plan.length === 0) return '__empty__';
+  return plan.map((p) => `${Math.round((Number(p?.percent) || 0) * 100) / 100}`).join('/');
+}
+
+// Take a "source" payment plan (a list of { label, percent }) and
+// re-derive its amounts against the given total. Used when Attila
+// selects multiple estimates and we have to scale a single chosen
+// plan to the combined total.
+function scalePlanToTotal(plan, total) {
+  if (!Array.isArray(plan) || plan.length === 0) return [];
+  const t = Number(total) || 0;
+  return plan.map((p) => {
+    const pct = Number(p?.percent) || 0;
+    return {
+      label: p?.label || '',
+      percent: pct,
+      amount: Math.round((pct / 100) * t * 100) / 100,
+      due_date: p?.due_date || '',
+    };
+  });
+}
+
+// Build a single virtual estimate from the rows the user picked,
+// including the merged Schedule A sections, total, and a single
+// payment plan scaled to the merged total. Returns an object shaped
+// like a row from `estimates` so the rest of the flow can keep using
+// `estimate.*` without caring whether one or many estimates feed it.
+//
+//   estimates:    all approved estimate rows for the job
+//   pickedIds:    array of estimate.id the user has checked
+//   planSourceId: id of the estimate whose payment_plan to scale.
+//                 When omitted we use the LATEST picked estimate.
+//
+// The function is pure — no side effects, no state.
+function buildPickedEstimate({ estimates, pickedIds, planSourceId }) {
+  const list = (estimates || []).filter((e) => pickedIds?.includes?.(e.id));
+  if (list.length === 0) {
+    return { estimate: null, mergedTotal: 0, scaledPlan: [], plansDiffer: false, planFingerprints: [] };
+  }
+
+  const mergedSections = [];
+  let mergedTotal = 0;
+  list.forEach((e, idx) => {
+    const numberTag = e.estimate_number ? `#${e.estimate_number}` : `Estimate ${idx + 1}`;
+    const labelTag = e.option_label || e.bundle_label || numberTag;
+    const total = Number(e.total_amount) || 0;
+    mergedTotal += total;
+    let pushed = false;
+    if (Array.isArray(e.sections) && e.sections.length) {
+      e.sections.forEach((s) => {
+        mergedSections.push({
+          title: list.length > 1 ? `[${labelTag}] ${s.title || ''}`.trim() : (s.title || ''),
+          items: Array.isArray(s.items) ? s.items : [],
+        });
+        pushed = true;
+      });
+    }
+    if (!pushed && Array.isArray(e.line_items) && e.line_items.length) {
+      mergedSections.push({
+        title: list.length > 1 ? `[${labelTag}] Description of Work` : 'Description of Work',
+        items: e.line_items.map((li) => ({
+          description: li.description || li.item || '',
+          scope: li.scope || '',
+          price: Number(li.price ?? li.total ?? li.unit_price ?? 0),
+        })),
+      });
+      pushed = true;
+    }
+    if (!pushed) {
+      mergedSections.push({
+        title: list.length > 1 ? `[${labelTag}] Combined work` : 'Combined work',
+        items: [{
+          description: e.estimate_number ? `Estimate #${e.estimate_number}` : `Estimate ${idx + 1}`,
+          scope: e.header_description || e.customer_message || '',
+          price: total,
+        }],
+      });
+    }
+  });
+
+  // Detect "different payment plans" so the parent can pop a modal.
+  // Empty / missing plans count as their own bucket — when one estimate
+  // has a plan and the other doesn't, that's still "differs".
+  const planFingerprints = list.map((e) => planFingerprint(e.payment_plan));
+  const plansDiffer = list.length > 1 && new Set(planFingerprints).size > 1;
+
+  // Pick the source plan. Priority:
+  //   1. The estimate explicitly chosen via planSourceId (from the modal).
+  //   2. The most-recent picked estimate's plan.
+  //   3. Default 30/30/30/10.
+  const sourceEst = list.find((e) => e.id === planSourceId) || list[list.length - 1];
+  const sourcePlan = Array.isArray(sourceEst?.payment_plan) && sourceEst.payment_plan.length > 0
+    ? sourceEst.payment_plan
+    : DEFAULT_PAYMENT_PLAN_TEMPLATE;
+  const scaledPlan = scalePlanToTotal(sourcePlan, mergedTotal);
+
+  // Use the latest picked estimate as the "carrier" — the id/number we
+  // keep so DB writes (mark approved, etc.) still target a real row.
+  const carrier = list[list.length - 1];
+  const estimate = {
+    ...carrier,
+    sections: mergedSections,
+    total_amount: mergedTotal,
+    payment_plan: scaledPlan,
+    picked_estimate_ids: list.map((e) => e.id),
+    picked_count: list.length,
+  };
+
+  return { estimate, mergedTotal, scaledPlan, plansDiffer, planFingerprints };
+}
+
+// Stable default for new payment plans — moved to module scope so
+// buildPickedEstimate can reach it without depending on component state.
+const DEFAULT_PAYMENT_PLAN_TEMPLATE = [
+  { label: 'Deposit',         percent: 30 },
+  { label: 'Upon start',      percent: 30 },
+  { label: 'After painting',  percent: 30 },
+  { label: 'Upon completion', percent: 10 },
+];
+
 const STEPS = [
   { id: 1, label: 'Review Estimate' },
-  { id: 2, label: 'Payment Plan' },
+  { id: 2, label: 'Select Estimates' },
   { id: 3, label: 'Generate Contract' },
   { id: 4, label: 'Awaiting Signature' },
   { id: 5, label: 'Invoice & Deposit' },
@@ -135,6 +261,16 @@ export default function EstimateFlow({ job, user, onBack }) {
   const [showChangeModal, setShowChangeModal] = useState(false);
   const [changeText, setChangeText] = useState('');
   const [showManualAdvanceModal, setShowManualAdvanceModal] = useState(false);
+
+  // Step 2 (Estimate Picker) — replaces the old Payment Plan editor.
+  // Attila selects WHICH approved/signed estimates feed the contract;
+  // the math is derived from those rows. Picker is always shown so we
+  // get an explicit confirmation, even when there's only one estimate.
+  const [approvedEstimates, setApprovedEstimates] = useState([]); // list of estimate rows shown in the picker
+  const [pickedEstimateIds, setPickedEstimateIds] = useState([]); // currently checked
+  const [planSourceEstimateId, setPlanSourceEstimateId] = useState(null); // when plans differ, which plan to use
+  const [showPlanChooserModal, setShowPlanChooserModal] = useState(false);
+  const [showPickerConfirm, setShowPickerConfirm] = useState(false);
 
   // Step 5 — per-milestone invoicing.
   const [milestones, setMilestones] = useState([]);
@@ -738,19 +874,17 @@ export default function EstimateFlow({ job, user, onBack }) {
       setToast({ type: 'warning', message: 'You do not have permission to send contracts' });
       return;
     }
+    // SAFETY: do NOT auto-send. The button used to snapshot the
+    // contract DOM and ship the envelope immediately, which was
+    // dangerous when the seller needed to verify a fresh clause was
+    // present. Now we just rewind to step 3 so Attila can read the
+    // template, confirm the changes are there, and hit the explicit
+    // "Send via DocuSign" button when ready.
     setStep(3);
-    // Two animation frames + a small grace period so React commits the
-    // step change, the template mounts, and the browser settles layout.
-    // Without this the contract DOM isn't measurable yet.
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    const root = document.querySelector('.contract-doc');
-    if (!root) {
-      setToast({ type: 'error', message: 'Contract template still loading — try again in a second.' });
-      return;
-    }
-    const html = buildContractDocFromDom(root);
-    await generateAndSendContract(html);
+    setToast({
+      type: 'info',
+      message: 'Review the updated contract below. When ready, click "Send via DocuSign" to issue a new envelope.',
+    });
   }
 
   async function refreshContractStatus() {
@@ -1044,10 +1178,10 @@ export default function EstimateFlow({ job, user, onBack }) {
                   <button
                     onClick={resendTestEnvelope}
                     disabled={saving}
-                    title="Re-issue a fresh DocuSign envelope from the current contract template — for testing layout/anchor changes without redoing the whole flow."
+                    title="Go back to the contract template so you can review the latest changes BEFORE sending a fresh DocuSign envelope."
                     className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl border border-omega-orange/40 hover:border-omega-orange text-sm font-semibold text-omega-orange hover:bg-omega-pale transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <Send className="w-4 h-4" /> {saving ? 'Resending…' : 'Resend Test Envelope'}
+                    <FileText className="w-4 h-4" /> Review &amp; Re-send
                   </button>
                 )}
               </div>

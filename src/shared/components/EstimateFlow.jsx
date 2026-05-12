@@ -179,26 +179,44 @@ export default function EstimateFlow({ job, user, onBack }) {
         const mergedSections = [];
         let mergedTotal = 0;
         list.forEach((e, idx) => {
-          const tag = e.option_label || e.bundle_label || `Estimate ${idx + 1}`;
+          const numberTag = e.estimate_number ? `#${e.estimate_number}` : `Estimate ${idx + 1}`;
+          const labelTag = e.option_label || e.bundle_label || numberTag;
           const total = Number(e.total_amount) || 0;
           mergedTotal += total;
+          let pushed = false;
+          // Tries: sections → line_items → fallback placeholder. The
+          // placeholder guarantees that EVERY estimate is visibly
+          // accounted for in Schedule A even when its data shape is
+          // unusual (legacy estimate, missing items, etc.).
           if (Array.isArray(e.sections) && e.sections.length) {
             e.sections.forEach((s) => {
               mergedSections.push({
-                title: e.option_label || e.bundle_label
-                  ? `[${tag}] ${s.title || ''}`.trim()
-                  : (s.title || ''),
-                items: s.items || [],
+                title: `[${labelTag}] ${s.title || ''}`.trim(),
+                items: Array.isArray(s.items) ? s.items : [],
               });
+              pushed = true;
             });
-          } else if (Array.isArray(e.line_items) && e.line_items.length) {
+          }
+          if (!pushed && Array.isArray(e.line_items) && e.line_items.length) {
             mergedSections.push({
-              title: tag,
+              title: `[${labelTag}] Description of Work`,
               items: e.line_items.map((li) => ({
                 description: li.description || li.item || '',
                 scope: li.scope || '',
                 price: Number(li.price ?? li.total ?? li.unit_price ?? 0),
               })),
+            });
+            pushed = true;
+          }
+          // Last-resort placeholder — never let an estimate vanish.
+          if (!pushed) {
+            mergedSections.push({
+              title: `[${labelTag}] Combined work`,
+              items: [{
+                description: e.estimate_number ? `Estimate #${e.estimate_number}` : `Estimate ${idx + 1}`,
+                scope: e.header_description || e.customer_message || '',
+                price: total,
+              }],
             });
           }
         });

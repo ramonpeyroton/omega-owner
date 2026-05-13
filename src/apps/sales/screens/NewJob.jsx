@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, ArrowRight, User, Phone, Mail, MapPin, ChevronRight, Check, Calendar, Clock, Megaphone } from 'lucide-react';
+import { ArrowLeft, User, Phone, Mail, MapPin, Check, Calendar, Clock, Megaphone } from 'lucide-react';
 import { SERVICES } from '../data/questionnaire';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -17,17 +17,18 @@ const LEAD_SOURCES = [
 
 function ServiceIcon({ name }) {
   const Icon = Icons[name] || Icons.Wrench;
-  return <Icon className="w-6 h-6" />;
+  return <Icon className="w-5 h-5" />;
 }
 
+const labelCls = 'block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2';
+const inputCls = (err) =>
+  `w-full px-4 py-3.5 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors ${err ? 'border-omega-danger' : 'border-gray-200'}`;
+const inputWithIconCls = (err) =>
+  `w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors ${err ? 'border-omega-danger' : 'border-gray-200'}`;
+
 export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient }) {
-  const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
 
-  // `prefilledClient` lets the seller start a brand-new job for an
-  // existing client (e.g. they got a deck estimate, didn't bite, now
-  // they want a kitchen remodel). The fields are still editable in
-  // case the address or phone changed — we just save the typing.
   const [form, setForm] = useState({
     client_name:  prefilledClient?.client_name  || '',
     client_phone: prefilledClient?.client_phone || '',
@@ -38,44 +39,30 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
     visit_time:   '09:00',
   });
   const [services, setServices] = useState([]);
-  const [errors, setErrors] = useState({});
+  const [errors, setErrors]     = useState({});
 
-  const updateForm = (key, val) => setForm((f) => ({ ...f, [key]: val }));
+  const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
-  const validateStep1 = () => {
+  const toggleService = (id) => {
+    setServices((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]);
+    setErrors((e) => ({ ...e, services: undefined }));
+  };
+
+  const validate = () => {
     const e = {};
-    if (!form.client_name.trim()) e.client_name = 'Name is required';
-    if (!form.client_phone.replace(/\D/g, '') || form.client_phone.replace(/\D/g, '').length < 10)
-      e.client_phone = 'Valid 10-digit phone required';
-    if (!form.address.trim()) e.address = 'Address is required';
-    if (!form.lead_source)   e.lead_source = 'Select a lead source';
-    if (!form.visit_date)    e.visit_date  = 'Schedule a visit date';
+    if (!form.client_name.trim())                                              e.client_name  = 'Name is required';
+    if (!form.client_phone.replace(/\D/g, '') ||
+        form.client_phone.replace(/\D/g, '').length < 10)                     e.client_phone = 'Valid 10-digit phone required';
+    if (!form.address.trim())                                                  e.address      = 'Address is required';
+    if (!form.lead_source)                                                     e.lead_source  = 'Select a lead source';
+    if (!form.visit_date)                                                      e.visit_date   = 'Schedule a visit date';
+    if (services.length === 0)                                                 e.services     = 'Select at least one service';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
 
-  const validateStep2 = () => {
-    if (services.length === 0) {
-      setErrors({ services: 'Select at least one service' });
-      return false;
-    }
-    setErrors({});
-    return true;
-  };
-
-  const toggleService = (id) => {
-    setServices((prev) =>
-      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
-    );
-    setErrors({});
-  };
-
-  const handleNext = () => {
-    if (step === 1 && validateStep1()) setStep(2);
-    else if (step === 2 && validateStep2()) handleCreate();
-  };
-
   const handleCreate = async () => {
+    if (!validate()) return;
     setSaving(true);
     try {
       const jobData = {
@@ -94,19 +81,15 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
       };
 
       const { data, error } = await supabase
-        .from('jobs')
-        .insert([jobData])
-        .select()
-        .single();
-
+        .from('jobs').insert([jobData]).select().single();
       if (error) throw error;
 
-      // ── Create calendar sales_visit event ──────────────────────────
+      // ── Create calendar sales_visit event ───────────────────────────
       if (form.visit_date) {
         try {
           const timeStr  = form.visit_time || '09:00';
           const startsAt = new Date(`${form.visit_date}T${timeStr}:00`);
-          const endsAt   = new Date(startsAt.getTime() + 60 * 60 * 1000); // +1h
+          const endsAt   = new Date(startsAt.getTime() + 60 * 60 * 1000);
           await createEvent({
             kind:             'sales_visit',
             title:            `Visit: ${form.client_name.trim()}`,
@@ -117,19 +100,18 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
             notes:            form.address.trim(),
           });
         } catch (calErr) {
-          // Don't block job creation if calendar insert fails
           console.warn('Calendar event creation failed:', calErr);
         }
       }
 
-      // Notify operations that a new job came in
       notify({
         recipientRole: 'operations',
-        title:   'New job created',
-        message: `${user.name} created a new ${services.join(', ')} for ${form.client_name.trim()}.`,
+        title:   'New lead registered',
+        message: `${user.name} added ${form.client_name.trim()} (${services.join(', ')}) via ${form.lead_source || 'unknown source'}.`,
         type:    'job',
         jobId:   data.id,
       });
+
       onJobCreated(data);
     } catch (err) {
       console.error(err);
@@ -142,36 +124,25 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
     <div className="min-h-screen bg-omega-cloud">
       {/* Header */}
       <div className="bg-omega-charcoal px-5 pt-12 pb-6">
-        <div className="flex items-center gap-3 mb-5">
-          <button onClick={() => step === 1 ? onNavigate('home') : setStep(1)} className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => onNavigate('home')}
+            className="p-2 rounded-xl bg-white/10 text-white hover:bg-white/20 transition-colors"
+          >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <p className="text-omega-fog text-xs font-medium">New Job</p>
-            <h1 className="text-white font-bold text-lg">
-              {step === 1 ? 'Client Information' : 'Select Services'}
-            </h1>
+            <p className="text-omega-fog text-xs font-medium">Sales</p>
+            <h1 className="text-white font-bold text-lg">New Lead</h1>
           </div>
-        </div>
-
-        {/* Step indicator */}
-        <div className="flex gap-2">
-          {[1, 2].map((s) => (
-            <div key={s} className={`h-1.5 rounded-full flex-1 transition-all ${s <= step ? 'bg-omega-orange' : 'bg-white/20'}`} />
-          ))}
-        </div>
-        <div className="flex justify-between mt-1.5">
-          <span className="text-[11px] text-omega-fog">Step {step} of 2</span>
-          <span className="text-[11px] text-omega-fog">{step === 1 ? 'Client Info' : 'Services'}</span>
         </div>
       </div>
 
-      <div className="px-5 py-6">
-        {/* Returning-client banner — visible only when the seller hit
-            "Start New Job for this Client" from another job's card.
-            Reminds them why the form is pre-filled. */}
-        {prefilledClient && step === 1 && (
-          <div className="mb-4 p-3 rounded-xl bg-omega-pale border border-omega-orange/30">
+      <div className="px-5 py-6 space-y-5 pb-32">
+
+        {/* Returning-client banner */}
+        {prefilledClient && (
+          <div className="p-3 rounded-xl bg-omega-pale border border-omega-orange/30">
             <p className="text-xs font-bold text-omega-orange uppercase tracking-wider">Returning Client</p>
             <p className="text-sm text-omega-charcoal mt-0.5">
               Starting a fresh job for <strong>{prefilledClient.client_name || 'this client'}</strong>. Edit any field if it has changed.
@@ -179,196 +150,175 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
           </div>
         )}
 
-        {step === 1 && (
-          <div className="space-y-4">
-            {/* Client Name */}
-            <div>
-              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
-                Client Name *
-              </label>
-              <div className="relative">
-                <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog" />
-                <input
-                  type="text"
-                  value={form.client_name}
-                  onChange={(e) => updateForm('client_name', e.target.value)}
-                  placeholder="Full name"
-                  autoFocus
-                  className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors ${errors.client_name ? 'border-omega-danger' : 'border-gray-200'}`}
-                />
-              </div>
-              {errors.client_name && <p className="text-xs text-omega-danger mt-1">{errors.client_name}</p>}
-            </div>
+        {/* ── Client Name ─────────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>Client Name *</label>
+          <div className="relative">
+            <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+            <input
+              type="text"
+              value={form.client_name}
+              onChange={(e) => set('client_name', e.target.value)}
+              placeholder="Full name"
+              autoFocus
+              className={inputWithIconCls(errors.client_name)}
+            />
+          </div>
+          {errors.client_name && <p className="text-xs text-omega-danger mt-1">{errors.client_name}</p>}
+        </div>
 
-            {/* Phone */}
-            <div>
-              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
-                Phone Number *
-              </label>
-              <div className="relative">
-                <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog" />
-                <input
-                  type="tel"
-                  value={form.client_phone}
-                  onChange={(e) => updateForm('client_phone', formatPhoneInput(e.target.value))}
-                  placeholder="(203) 555-0100"
-                  className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors ${errors.client_phone ? 'border-omega-danger' : 'border-gray-200'}`}
-                />
-              </div>
-              {errors.client_phone && <p className="text-xs text-omega-danger mt-1">{errors.client_phone}</p>}
-            </div>
+        {/* ── Phone ───────────────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>Phone Number *</label>
+          <div className="relative">
+            <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+            <input
+              type="tel"
+              value={form.client_phone}
+              onChange={(e) => set('client_phone', formatPhoneInput(e.target.value))}
+              placeholder="(203) 555-0100"
+              className={inputWithIconCls(errors.client_phone)}
+            />
+          </div>
+          {errors.client_phone && <p className="text-xs text-omega-danger mt-1">{errors.client_phone}</p>}
+        </div>
 
-            {/* Email */}
-            <div>
-              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
-                Email <span className="text-omega-fog font-normal normal-case">(optional)</span>
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog" />
-                <input
-                  type="email"
-                  value={form.client_email}
-                  onChange={(e) => updateForm('client_email', e.target.value)}
-                  placeholder="client@email.com"
-                  className="w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border border-gray-200 text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors"
-                />
-              </div>
-            </div>
+        {/* ── Email ───────────────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>Email <span className="text-omega-fog font-normal normal-case">(optional)</span></label>
+          <div className="relative">
+            <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+            <input
+              type="email"
+              value={form.client_email}
+              onChange={(e) => set('client_email', e.target.value)}
+              placeholder="client@email.com"
+              className={inputWithIconCls(false)}
+            />
+          </div>
+        </div>
 
-            {/* Address */}
-            <div>
-              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
-                Property Address *
-              </label>
-              <div className="relative">
-                <MapPin className="absolute left-3.5 top-3.5 w-4 h-4 text-omega-fog" />
-                <textarea
-                  value={form.address}
-                  onChange={(e) => updateForm('address', e.target.value)}
-                  placeholder="123 Main St, Westport, CT 06880"
-                  rows={3}
-                  className={`w-full pl-10 pr-4 py-3 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors resize-none ${errors.address ? 'border-omega-danger' : 'border-gray-200'}`}
-                />
-              </div>
-              {errors.address && <p className="text-xs text-omega-danger mt-1">{errors.address}</p>}
-            </div>
+        {/* ── Address ─────────────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>Property Address *</label>
+          <div className="relative">
+            <MapPin className="absolute left-3.5 top-3.5 w-4 h-4 text-omega-fog pointer-events-none" />
+            <textarea
+              value={form.address}
+              onChange={(e) => set('address', e.target.value)}
+              placeholder="123 Main St, Westport, CT 06880"
+              rows={3}
+              className={`w-full pl-10 pr-4 py-3 rounded-xl bg-white border text-omega-charcoal placeholder-omega-fog focus:outline-none focus:border-omega-orange transition-colors resize-none ${errors.address ? 'border-omega-danger' : 'border-gray-200'}`}
+            />
+          </div>
+          {errors.address && <p className="text-xs text-omega-danger mt-1">{errors.address}</p>}
+        </div>
 
-            {/* Lead Source */}
-            <div>
-              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
-                Lead Source *
-              </label>
-              <div className="relative">
-                <Megaphone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
-                <select
-                  value={form.lead_source}
-                  onChange={(e) => updateForm('lead_source', e.target.value)}
-                  className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors appearance-none ${errors.lead_source ? 'border-omega-danger' : 'border-gray-200'}`}
+        {/* ── Lead Source ─────────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>Lead Source *</label>
+          <div className="relative">
+            <Megaphone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+            <select
+              value={form.lead_source}
+              onChange={(e) => set('lead_source', e.target.value)}
+              className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors appearance-none ${errors.lead_source ? 'border-omega-danger' : 'border-gray-200'}`}
+            >
+              <option value="">How did they find us?</option>
+              {LEAD_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          {errors.lead_source && <p className="text-xs text-omega-danger mt-1">{errors.lead_source}</p>}
+        </div>
+
+        {/* ── Schedule Visit ──────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>Schedule Visit *</label>
+          <div className="flex gap-3">
+            <div className="relative flex-1">
+              <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+              <input
+                type="date"
+                value={form.visit_date}
+                onChange={(e) => set('visit_date', e.target.value)}
+                min={new Date().toISOString().split('T')[0]}
+                className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors ${errors.visit_date ? 'border-omega-danger' : 'border-gray-200'}`}
+              />
+            </div>
+            <div className="relative w-32">
+              <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+              <input
+                type="time"
+                value={form.visit_time}
+                onChange={(e) => set('visit_time', e.target.value)}
+                className="w-full pl-10 pr-3 py-3.5 rounded-xl bg-white border border-gray-200 text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors"
+              />
+            </div>
+          </div>
+          {errors.visit_date && <p className="text-xs text-omega-danger mt-1">{errors.visit_date}</p>}
+        </div>
+
+        {/* ── Services ────────────────────────────────────────────── */}
+        <div>
+          <label className={labelCls}>
+            Service Type * {services.length > 0 && <span className="text-omega-orange normal-case font-normal">· {services.length} selected</span>}
+          </label>
+          {errors.services && (
+            <div className="mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
+              <p className="text-sm text-omega-warning">{errors.services}</p>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2.5">
+            {SERVICES.map((svc) => {
+              const selected = services.includes(svc.id);
+              return (
+                <button
+                  key={svc.id}
+                  type="button"
+                  onClick={() => toggleService(svc.id)}
+                  className={`relative flex items-center gap-3 p-3.5 rounded-2xl border-2 transition-all duration-200 text-left ${
+                    selected
+                      ? 'border-omega-orange bg-omega-pale'
+                      : 'border-gray-200 bg-white hover:border-omega-orange/40'
+                  }`}
                 >
-                  <option value="">How did they find us?</option>
-                  {LEAD_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              {errors.lead_source && <p className="text-xs text-omega-danger mt-1">{errors.lead_source}</p>}
-            </div>
-
-            {/* Visit date + time */}
-            <div>
-              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
-                Schedule Visit *
-              </label>
-              <div className="flex gap-3">
-                <div className="relative flex-1">
-                  <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
-                  <input
-                    type="date"
-                    value={form.visit_date}
-                    onChange={(e) => updateForm('visit_date', e.target.value)}
-                    min={new Date().toISOString().split('T')[0]}
-                    className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors ${errors.visit_date ? 'border-omega-danger' : 'border-gray-200'}`}
-                  />
-                </div>
-                <div className="relative w-32">
-                  <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
-                  <input
-                    type="time"
-                    value={form.visit_time}
-                    onChange={(e) => updateForm('visit_time', e.target.value)}
-                    className="w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border border-gray-200 text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors"
-                  />
-                </div>
-              </div>
-              {errors.visit_date && <p className="text-xs text-omega-danger mt-1">{errors.visit_date}</p>}
-            </div>
-
-            {errors.general && (
-              <div className="p-3 rounded-xl bg-red-50 border border-red-200">
-                <p className="text-sm text-omega-danger">{errors.general}</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {step === 2 && (
-          <div>
-            <p className="text-sm text-omega-stone mb-4">Select all services needed for <strong className="text-omega-charcoal">{form.client_name}</strong></p>
-
-            {errors.services && (
-              <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200">
-                <p className="text-sm text-omega-warning">{errors.services}</p>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              {SERVICES.map((svc) => {
-                const selected = services.includes(svc.id);
-                return (
-                  <button
-                    key={svc.id}
-                    onClick={() => toggleService(svc.id)}
-                    className={`relative flex flex-col items-center justify-center gap-2 p-4 rounded-2xl border-2 transition-all duration-200 ${
-                      selected
-                        ? 'border-omega-orange bg-omega-pale'
-                        : 'border-gray-200 bg-white hover:border-omega-orange/40'
-                    }`}
-                  >
-                    {selected && (
-                      <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-omega-orange flex items-center justify-center">
-                        <Check className="w-3 h-3 text-white" />
-                      </div>
-                    )}
-                    <div className={`${selected ? 'text-omega-orange' : 'text-omega-stone'}`}>
-                      <ServiceIcon name={svc.icon} />
+                  {selected && (
+                    <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-omega-orange flex items-center justify-center">
+                      <Check className="w-2.5 h-2.5 text-white" />
                     </div>
-                    <span className={`text-xs font-semibold text-center leading-tight ${selected ? 'text-omega-charcoal' : 'text-omega-slate'}`}>
-                      {svc.label}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                  )}
+                  <div className={selected ? 'text-omega-orange' : 'text-omega-stone'}>
+                    <ServiceIcon name={svc.icon} />
+                  </div>
+                  <span className={`text-xs font-semibold leading-tight ${selected ? 'text-omega-charcoal' : 'text-omega-slate'}`}>
+                    {svc.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
-            {services.length > 0 && (
-              <div className="mt-4 p-3 rounded-xl bg-omega-pale border border-omega-orange/20">
-                <p className="text-xs text-omega-orange font-medium">
-                  {services.length} service{services.length > 1 ? 's' : ''} selected
-                </p>
-              </div>
-            )}
+        {errors.general && (
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200">
+            <p className="text-sm text-omega-danger">{errors.general}</p>
           </div>
         )}
+      </div>
 
+      {/* Sticky footer button */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-5 py-4">
         <button
-          onClick={handleNext}
+          onClick={handleCreate}
           disabled={saving}
-          className="w-full flex items-center justify-center gap-2.5 px-6 py-4 rounded-2xl bg-omega-orange hover:bg-omega-dark disabled:opacity-60 text-white font-semibold text-base transition-all duration-200 mt-8 shadow-lg shadow-omega-orange/25"
+          className="w-full flex items-center justify-center gap-2.5 px-6 py-4 rounded-2xl bg-omega-orange hover:bg-omega-dark disabled:opacity-60 text-white font-semibold text-base transition-all duration-200 shadow-lg shadow-omega-orange/25"
         >
           {saving ? (
             <LoadingSpinner size={20} color="text-white" />
           ) : (
             <>
-              {step === 1 ? 'Next' : 'Start Questionnaire'}
-              <ArrowRight className="w-5 h-5" />
+              <Check className="w-5 h-5" />
+              Create Lead
             </>
           )}
         </button>

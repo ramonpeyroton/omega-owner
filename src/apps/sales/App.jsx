@@ -87,10 +87,9 @@ function SalesRouter({ user, onLogout, onOpenJob }) {
         prefilledClient={newJobPrefill}
         onJobCreated={(job) => {
           setCurrentJob(job);
-          setReportJob(null);
-          setPdfContext('');
           setNewJobPrefill(null);
-          setScreen('pdf-upload');
+          // No auto-redirect to questionnaire — Attila starts it from the job card
+          setScreen('home');
         }}
       />
     );

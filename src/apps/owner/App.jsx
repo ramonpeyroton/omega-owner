@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { LayoutDashboard, GitBranch, DollarSign, Bell, Calendar } from 'lucide-react';
 import Dashboard from './screens/Dashboard';
 import JobDetail from './screens/JobDetail';
 import AssignSubs from './screens/AssignSubs';
@@ -18,6 +19,37 @@ import LeadsList from '../receptionist/screens/LeadsList';
 import CommissionsScreen from '../../shared/components/CommissionsScreen';
 import JobFullView from '../../shared/components/JobFullView';
 import { useBackNavHome } from '../../shared/lib/backNav';
+
+function MobileBottomBar({ screen, onNavigate, notifCount }) {
+  const items = [
+    { id: 'dashboard',  icon: LayoutDashboard, label: 'Home' },
+    { id: 'pipeline',   icon: GitBranch,        label: 'Pipeline' },
+    { id: 'finance',    icon: DollarSign,        label: 'Finance' },
+    { id: 'calendar',   icon: Calendar,          label: 'Calendar' },
+    { id: 'notifications', icon: Bell,           label: 'Alerts', badge: notifCount },
+  ];
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-gray-200 flex md:hidden">
+      {items.map(({ id, icon: Icon, label, badge }) => (
+        <button
+          key={id}
+          onClick={() => onNavigate(id)}
+          className={`flex-1 flex flex-col items-center justify-center py-2 gap-0.5 relative ${
+            screen === id ? 'text-omega-orange' : 'text-omega-stone'
+          }`}
+        >
+          <Icon className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">{label}</span>
+          {badge > 0 && (
+            <span className="absolute top-1 right-[18%] min-w-[16px] h-4 px-1 flex items-center justify-center text-[9px] font-bold rounded-full bg-omega-orange text-white">
+              {badge > 9 ? '9+' : badge}
+            </span>
+          )}
+        </button>
+      ))}
+    </nav>
+  );
+}
 
 export default function App({ user, onLogout }) {
   const [screen, setScreen] = useState('dashboard');
@@ -138,7 +170,7 @@ export default function App({ user, onLogout }) {
         user={user}
         onOpenJob={(job) => { setFullViewJob(job); setFullViewInitialTab('daily'); }}
       />
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden pb-16 md:pb-0">
         {renderScreen()}
       </main>
       {fullViewJob && (
@@ -152,6 +184,7 @@ export default function App({ user, onLogout }) {
         />
       )}
       <JarvisChat user={user} />
+      <MobileBottomBar screen={screen} onNavigate={navigate} notifCount={notifCount} />
     </div>
   );
 }

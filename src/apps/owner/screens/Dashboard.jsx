@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   RefreshCw, Calendar, TrendingUp, TrendingDown, ArrowRight, Briefcase,
   DollarSign, Banknote, Target, GitBranch, Percent, Wallet, AlertOctagon,
+  CheckCircle2,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -751,7 +752,21 @@ export default function Dashboard({ user, onSelectJob }) {
 
   return (
     <div className="flex-1 overflow-y-auto bg-omega-cloud">
-      <div className="max-w-7xl mx-auto p-4 md:p-6 lg:p-8 space-y-5">
+
+      {/* ══ MOBILE VIEW (md:hidden) ══════════════════════════════════ */}
+      <MobileOwnerDashboard
+        data={data}
+        bounds={bounds}
+        revenueDelta={revenueDelta}
+        profitDelta={profitDelta}
+        closeRateDelta={closeRateDelta}
+        lastMonthAbbr={lastMonthAbbr}
+        onSelectJob={onSelectJob}
+        onRefresh={() => setRefreshTick((t) => t + 1)}
+      />
+
+      {/* ══ DESKTOP VIEW (hidden md:block) ═══════════════════════════ */}
+      <div className="hidden md:block max-w-7xl mx-auto p-4 md:p-6 lg:p-8 space-y-5">
 
         {/* ─── Header ───────────────────────────────────────── */}
         <header className="flex items-start justify-between gap-3 flex-wrap">
@@ -986,6 +1001,199 @@ export default function Dashboard({ user, onSelectJob }) {
         <p className="text-[11px] text-omega-stone text-center pt-2">
           All data is updated as of {new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
         </p>
+      </div>{/* end desktop inner */}
+      </div>{/* end desktop wrapper */}
+
+    </div>
+  );
+}
+
+// ─── Mobile Owner Dashboard ───────────────────────────────────────
+function MobileOwnerDashboard({ data, bounds, revenueDelta, profitDelta, closeRateDelta, lastMonthAbbr, onSelectJob, onRefresh }) {
+  const kpis = [
+    { label: 'Revenue MTD',     value: fmtMoney(data.revenueMTD),       color: 'bg-omega-orange',  delta: revenueDelta },
+    { label: 'Profit MTD',      value: fmtMoney(data.profitMTD),        color: 'bg-emerald-600',   delta: profitDelta,
+      negative: data.profitMTD < 0 },
+    { label: 'Active Jobs',     value: String(data.activeJobsCount),     color: 'bg-blue-600',      delta: null },
+    { label: 'Pipeline Value',  value: fmtMoney(data.pipelineValue),     color: 'bg-violet-600',    delta: null },
+    { label: 'Close Rate',      value: fmtPct(data.closeRateMTD),        color: 'bg-amber-500',     delta: closeRateDelta },
+    { label: 'Cash Available',  value: data.qbCash != null ? fmtMoney(data.qbCash) : '—', color: 'bg-slate-600', delta: null },
+  ];
+
+  return (
+    <div className="md:hidden flex flex-col min-h-full">
+
+      {/* ── Dark header ───────────────────────────────────────── */}
+      <div className="bg-omega-charcoal px-4 pt-10 pb-5">
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <p className="text-white/50 text-[11px] font-bold uppercase tracking-widest leading-none">
+              {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
+            </p>
+            <h1 className="text-xl font-black text-white mt-1">Dashboard 📊</h1>
+          </div>
+          <button
+            onClick={onRefresh}
+            className="p-2 rounded-xl bg-white/10 border border-white/10"
+          >
+            <RefreshCw className="w-5 h-5 text-white" />
+          </button>
+        </div>
+
+        {/* 2×3 KPI grid */}
+        <div className="grid grid-cols-3 gap-2">
+          {kpis.map((k) => {
+            const positive = k.delta?.positive !== false;
+            const Arrow = k.delta ? (positive ? TrendingUp : TrendingDown) : null;
+            return (
+              <div key={k.label} className={`${k.negative ? 'bg-red-600' : k.color} rounded-2xl p-3`}>
+                <p className="text-white/70 text-[9px] font-bold uppercase tracking-wide leading-tight">{k.label}</p>
+                <p className="text-white text-base font-black mt-1 leading-none tabular-nums">{k.value}</p>
+                {k.delta && Number.isFinite(k.delta.raw) && (
+                  <div className={`flex items-center gap-0.5 mt-1 ${positive ? 'text-white/80' : 'text-red-200'}`}>
+                    {Arrow && <Arrow className="w-2.5 h-2.5" />}
+                    <span className="text-[9px] font-bold">{Math.abs(parseFloat(k.delta.text))}%</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Scrollable content ────────────────────────────────── */}
+      <div className="flex-1 bg-omega-cloud px-4 py-4 space-y-3">
+
+        {/* Alerts */}
+        {data.alerts.length > 0 && (
+          <div className="space-y-2">
+            {data.alerts.map((a) => {
+              const toneMap = {
+                red:   { bg: 'bg-red-50',    border: 'border-red-200',   text: 'text-red-700',   badge: 'bg-red-600' },
+                amber: { bg: 'bg-amber-50',  border: 'border-amber-200', text: 'text-amber-800', badge: 'bg-amber-500' },
+                blue:  { bg: 'bg-blue-50',   border: 'border-blue-200',  text: 'text-blue-700',  badge: 'bg-blue-600' },
+              };
+              const t = toneMap[a.tone] || toneMap.amber;
+              return (
+                <div key={a.id} className={`flex items-center gap-3 p-3 rounded-xl border ${t.bg} ${t.border}`}>
+                  <span className={`w-8 h-8 rounded-lg ${t.badge} text-white flex items-center justify-center font-black text-sm flex-shrink-0`}>
+                    {a.count}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-bold truncate ${t.text}`}>{a.title}</p>
+                    <p className="text-[11px] text-omega-stone truncate">{a.subtitle}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {data.alerts.length === 0 && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-50 border border-emerald-200">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+            <p className="text-sm font-semibold text-emerald-700">All clear — no alerts</p>
+          </div>
+        )}
+
+        {/* Active Jobs */}
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <h2 className="text-sm font-bold text-omega-charcoal flex items-center gap-2">
+              <Briefcase className="w-4 h-4 text-omega-orange" /> Active Jobs
+            </h2>
+            <span className="text-xs font-bold text-omega-stone">{data.activeJobsCount} total</span>
+          </div>
+          {data.inProgressJobs.length === 0 ? (
+            <p className="text-xs text-omega-stone text-center py-6">No jobs in progress.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {data.inProgressJobs.slice(0, 5).map((j) => {
+                const bucket = marginBucket(j.margin);
+                return (
+                  <li
+                    key={j.id}
+                    onClick={() => onSelectJob?.(j.raw)}
+                    className="flex items-center gap-3 px-4 py-3 active:bg-omega-cloud cursor-pointer"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-omega-charcoal truncate">{j.client_name || 'Untitled'}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden max-w-[100px]">
+                          <div className="h-full bg-omega-orange" style={{ width: `${j.progress}%` }} />
+                        </div>
+                        <span className="text-[10px] font-bold text-omega-stone tabular-nums">{j.progress}%</span>
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border flex-shrink-0 ${bucket.cls}`}>
+                      {bucket.label}
+                    </span>
+                    <ArrowRight className="w-4 h-4 text-omega-stone flex-shrink-0" />
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {/* Action Center */}
+        {data.actions.length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-100">
+              <h2 className="text-sm font-bold text-omega-charcoal">Action Center</h2>
+            </div>
+            <ul className="divide-y divide-gray-100">
+              {data.actions.slice(0, 5).map((a) => (
+                <li key={a.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className={`w-2 h-8 rounded-full flex-shrink-0 ${
+                    a.priority === 'high' ? 'bg-red-500' : 'bg-amber-400'
+                  }`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-omega-charcoal truncate">{a.title}</p>
+                    <p className="text-[11px] text-omega-stone truncate">{a.subtitle}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Sales funnel quick stats */}
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100">
+            <h2 className="text-sm font-bold text-omega-charcoal flex items-center gap-2">
+              <GitBranch className="w-4 h-4 text-omega-orange" /> Pipeline · {rangeLabel(bounds.start, bounds.end)}
+            </h2>
+          </div>
+          <div className="grid grid-cols-4 divide-x divide-gray-100">
+            {[
+              { label: 'Leads',       value: data.funnel.leadsCount },
+              { label: 'Appts',       value: data.funnel.monthAppts },
+              { label: 'Estimates',   value: data.funnel.monthEstSent },
+              { label: 'Closed',      value: data.funnel.monthClosed },
+            ].map((s) => (
+              <div key={s.label} className="flex flex-col items-center py-4">
+                <p className="text-lg font-black text-omega-charcoal tabular-nums">{s.value}</p>
+                <p className="text-[9px] font-bold text-omega-stone uppercase tracking-wide mt-0.5">{s.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Cash & Payments quick row */}
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { label: 'Due This Week', value: fmtMoney(data.payments.dueThisWeek), urgent: data.payments.dueThisWeek > 0 },
+            { label: 'Overdue',       value: fmtMoney(data.payments.overdue),     urgent: data.payments.overdue > 0 },
+            { label: 'Next 30 Days',  value: fmtMoney(data.payments.upcoming30),  urgent: false },
+          ].map((p) => (
+            <div key={p.label} className={`rounded-xl p-3 text-center ${p.urgent ? 'bg-red-50 border border-red-200' : 'bg-white border border-gray-100'}`}>
+              <p className={`text-sm font-black tabular-nums ${p.urgent ? 'text-red-700' : 'text-omega-charcoal'}`}>{p.value}</p>
+              <p className="text-[9px] font-bold text-omega-stone uppercase tracking-wide mt-0.5 leading-tight">{p.label}</p>
+            </div>
+          ))}
+        </div>
+
       </div>
     </div>
   );

@@ -1,11 +1,19 @@
 import { useState } from 'react';
-import { ArrowLeft, ArrowRight, User, Phone, Mail, MapPin, ChevronRight, Check } from 'lucide-react';
+import { ArrowLeft, ArrowRight, User, Phone, Mail, MapPin, ChevronRight, Check, Calendar, Clock, Megaphone } from 'lucide-react';
 import { SERVICES } from '../data/questionnaire';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
 import * as Icons from 'lucide-react';
 import { notify } from '../../../shared/lib/notifications';
 import { formatPhoneInput, toE164 } from '../../../shared/lib/phone';
+import { createEvent } from '../../../shared/lib/calendar';
+
+// Same list as receptionist (leadCatalog.js)
+const LEAD_SOURCES = [
+  'Google', 'Referral', 'Houzz', 'HomeAdvisor', 'Angi',
+  'Mr.NailEdit', 'Door to Door', 'Social Media', 'Repeat Client',
+  'Drove By', 'Other',
+];
 
 function ServiceIcon({ name }) {
   const Icon = Icons[name] || Icons.Wrench;
@@ -21,10 +29,13 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
   // they want a kitchen remodel). The fields are still editable in
   // case the address or phone changed — we just save the typing.
   const [form, setForm] = useState({
-    client_name: prefilledClient?.client_name || '',
+    client_name:  prefilledClient?.client_name  || '',
     client_phone: prefilledClient?.client_phone || '',
     client_email: prefilledClient?.client_email || '',
-    address: prefilledClient?.address || '',
+    address:      prefilledClient?.address      || '',
+    lead_source:  '',
+    visit_date:   '',
+    visit_time:   '09:00',
   });
   const [services, setServices] = useState([]);
   const [errors, setErrors] = useState({});
@@ -37,6 +48,8 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
     if (!form.client_phone.replace(/\D/g, '') || form.client_phone.replace(/\D/g, '').length < 10)
       e.client_phone = 'Valid 10-digit phone required';
     if (!form.address.trim()) e.address = 'Address is required';
+    if (!form.lead_source)   e.lead_source = 'Select a lead source';
+    if (!form.visit_date)    e.visit_date  = 'Schedule a visit date';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -66,15 +79,18 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
     setSaving(true);
     try {
       const jobData = {
-        client_name: form.client_name.trim(),
-        client_phone: toE164(form.client_phone) || form.client_phone,
-        client_email: form.client_email.trim() || null,
-        address: form.address.trim(),
+        client_name:      form.client_name.trim(),
+        client_phone:     toE164(form.client_phone) || form.client_phone,
+        client_email:     form.client_email.trim() || null,
+        address:          form.address.trim(),
         salesperson_name: user.name,
-        service: services.join(', '),
-        status: 'draft',
-        answers: {},
-        created_at: new Date().toISOString(),
+        service:          services.join(', '),
+        lead_source:      form.lead_source || null,
+        pipeline_status:  'new_lead',
+        in_pipeline:      true,
+        status:           'draft',
+        answers:          {},
+        created_at:       new Date().toISOString(),
       };
 
       const { data, error } = await supabase
@@ -84,13 +100,35 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
         .single();
 
       if (error) throw error;
+
+      // ── Create calendar sales_visit event ──────────────────────────
+      if (form.visit_date) {
+        try {
+          const timeStr  = form.visit_time || '09:00';
+          const startsAt = new Date(`${form.visit_date}T${timeStr}:00`);
+          const endsAt   = new Date(startsAt.getTime() + 60 * 60 * 1000); // +1h
+          await createEvent({
+            kind:             'sales_visit',
+            title:            `Visit: ${form.client_name.trim()}`,
+            starts_at:        startsAt.toISOString(),
+            ends_at:          endsAt.toISOString(),
+            job_id:           data.id,
+            assigned_to_name: user.name,
+            notes:            form.address.trim(),
+          });
+        } catch (calErr) {
+          // Don't block job creation if calendar insert fails
+          console.warn('Calendar event creation failed:', calErr);
+        }
+      }
+
       // Notify operations that a new job came in
       notify({
         recipientRole: 'operations',
-        title: 'New job created',
+        title:   'New job created',
         message: `${user.name} created a new ${services.join(', ')} for ${form.client_name.trim()}.`,
-        type: 'job',
-        jobId: data.id,
+        type:    'job',
+        jobId:   data.id,
       });
       onJobCreated(data);
     } catch (err) {
@@ -213,6 +251,54 @@ export default function NewJob({ user, onNavigate, onJobCreated, prefilledClient
                 />
               </div>
               {errors.address && <p className="text-xs text-omega-danger mt-1">{errors.address}</p>}
+            </div>
+
+            {/* Lead Source */}
+            <div>
+              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
+                Lead Source *
+              </label>
+              <div className="relative">
+                <Megaphone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+                <select
+                  value={form.lead_source}
+                  onChange={(e) => updateForm('lead_source', e.target.value)}
+                  className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors appearance-none ${errors.lead_source ? 'border-omega-danger' : 'border-gray-200'}`}
+                >
+                  <option value="">How did they find us?</option>
+                  {LEAD_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              {errors.lead_source && <p className="text-xs text-omega-danger mt-1">{errors.lead_source}</p>}
+            </div>
+
+            {/* Visit date + time */}
+            <div>
+              <label className="block text-xs font-semibold text-omega-slate uppercase tracking-wider mb-2">
+                Schedule Visit *
+              </label>
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+                  <input
+                    type="date"
+                    value={form.visit_date}
+                    onChange={(e) => updateForm('visit_date', e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors ${errors.visit_date ? 'border-omega-danger' : 'border-gray-200'}`}
+                  />
+                </div>
+                <div className="relative w-32">
+                  <Clock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-omega-fog pointer-events-none" />
+                  <input
+                    type="time"
+                    value={form.visit_time}
+                    onChange={(e) => updateForm('visit_time', e.target.value)}
+                    className="w-full pl-10 pr-4 py-3.5 rounded-xl bg-white border border-gray-200 text-omega-charcoal focus:outline-none focus:border-omega-orange transition-colors"
+                  />
+                </div>
+              </div>
+              {errors.visit_date && <p className="text-xs text-omega-danger mt-1">{errors.visit_date}</p>}
             </div>
 
             {errors.general && (

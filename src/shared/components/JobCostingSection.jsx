@@ -55,14 +55,24 @@ export default function JobCostingSection({ job, user }) {
         .limit(1)
         .maybeSingle();
 
-      // Load estimate total (for default revenue)
-      const { data: est } = await supabase
+      // Sum of ALL approved/signed estimates — a job can have multiple
+      // approved estimates (e.g. two separate scopes both approved by
+      // the client). Using only the latest single estimate produces a
+      // false mismatch when the saved revenue is the correct multi-
+      // estimate total. Fall back to the latest estimate of any status
+      // when no approved ones exist (early-stage jobs with only a draft).
+      const { data: allEsts } = await supabase
         .from('estimates')
-        .select('total_amount')
+        .select('total_amount, status, created_at')
         .eq('job_id', job.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: false });
+
+      const approvedEsts = (allEsts || []).filter((e) =>
+        e.status === 'approved' || e.status === 'signed'
+      );
+      const estTotal = approvedEsts.length > 0
+        ? approvedEsts.reduce((acc, e) => acc + (Number(e.total_amount) || 0), 0)
+        : (allEsts?.[0]?.total_amount ?? null); // latest of any status as fallback
 
       // Sum of subcontractor_agreements.their_estimate
       const { data: agrs } = await supabase
@@ -71,7 +81,7 @@ export default function JobCostingSection({ job, user }) {
         .eq('job_id', job.id);
       const subs = (agrs || []).reduce((acc, a) => acc + (Number(a.their_estimate) || 0), 0);
       setSubsTotal(subs);
-      setLatestEstimateTotal(est?.total_amount ?? null);
+      setLatestEstimateTotal(estTotal != null ? Number(estTotal) : null);
 
       // Are there payment milestones for this job? If yes, the
       // amount_received column is owned by the trigger.
@@ -85,7 +95,7 @@ export default function JobCostingSection({ job, user }) {
 
       setRow(cost || null);
       setForm({
-        estimated_revenue: cost?.estimated_revenue ?? est?.total_amount ?? '',
+        estimated_revenue: cost?.estimated_revenue ?? (estTotal != null ? estTotal : '') ?? '',
         material_cost: cost?.material_cost ?? '',
         labor_cost: cost?.labor_cost ?? '',
         sub_cost: cost?.sub_cost ?? subs,
@@ -186,11 +196,14 @@ export default function JobCostingSection({ job, user }) {
         />
       </div>
 
-      {/* Drift warning — if the latest estimate.total_amount has moved
+      {/* Drift warning — if the sum of approved estimates has moved
           away from the saved estimated_revenue, the form silently kept
-          the old value and Finance KPIs went stale. Audit #12. */}
+          the old value and Finance KPIs went stale. Audit #12.
+          Uses the SUM of all approved/signed estimates so a job with
+          multiple approved scopes (e.g. two estimates both approved)
+          doesn't produce a false "mismatch" warning. */}
       {(() => {
-        const saved = parseNum(form.estimated_revenue);
+        const saved  = parseNum(form.estimated_revenue);
         const latest = latestEstimateTotal != null ? Number(latestEstimateTotal) : null;
         if (latest == null || saved === 0) return null;
         const diff = latest - saved;
@@ -199,7 +212,7 @@ export default function JobCostingSection({ job, user }) {
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-3">
             <div className="w-7 h-7 rounded-lg bg-amber-200 flex items-center justify-center flex-shrink-0 text-amber-800 font-bold text-sm">!</div>
             <div className="flex-1 text-sm text-amber-900">
-              The latest estimate is <strong>{money(latest)}</strong> — your saved revenue says
+              The sum of approved estimates is <strong>{money(latest)}</strong> — your saved revenue says
               <strong> {money(saved)}</strong> ({diff > 0 ? '+' : '−'}{money(Math.abs(diff))} difference).
               Job Costing won't auto-update.
             </div>

@@ -7,7 +7,6 @@ import Warehouse from './screens/Warehouse';
 import JobOfTheDay from './screens/JobOfTheDay';
 import QuickReceipts from './screens/QuickReceipts';
 import Sidebar from './components/Sidebar';
-import JarvisChat from '../../shared/components/JarvisChat';
 import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
 import MaterialsRun from '../../shared/components/MaterialsRun';
 import JobFullView from '../../shared/components/JobFullView';
@@ -166,7 +165,6 @@ export default function App({ user, onLogout }) {
           onJobDeleted={() => { setFullViewJob(null); setFullViewInitialTab(null); }}
         />
       )}
-      <JarvisChat user={user} />
     </div>
   );
 }

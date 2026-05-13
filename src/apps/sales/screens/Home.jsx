@@ -538,10 +538,10 @@ export default function Home({ user, onNavigate, onLogout, onOpenJob }) {
             />
           </section>
 
-          {/* Big New Job CTA */}
+          {/* Big New Job CTA — desktop only; mobile uses the FAB in MobileBottomBar */}
           <button
             onClick={() => onNavigate('new-job')}
-            className="w-full bg-omega-orange hover:bg-omega-dark text-white rounded-2xl p-4 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-lg shadow-omega-orange/25 transition-colors"
+            className="hidden sm:flex w-full bg-omega-orange hover:bg-omega-dark text-white rounded-2xl p-4 sm:p-5 items-center gap-3 sm:gap-4 shadow-lg shadow-omega-orange/25 transition-colors"
           >
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
               <PlusCircle className="w-5 h-5 sm:w-6 sm:h-6" />

@@ -10,7 +10,6 @@ import Estimates from './screens/Estimates';
 import Notifications from './screens/Notifications';
 import PipelineKanban from '../../shared/components/PipelineKanban';
 import EstimateFlow from '../../shared/components/EstimateFlow';
-import JarvisChat from '../../shared/components/JarvisChat';
 import CalendarScreen from '../../shared/components/Calendar/CalendarScreen';
 import LeadsList from '../receptionist/screens/LeadsList';
 import CommissionsScreen from '../../shared/components/CommissionsScreen';
@@ -42,7 +41,6 @@ export default function App(props) {
           onJobDeleted={() => { setFullViewJob(null); setFullViewInitialTab(null); }}
         />
       )}
-      <JarvisChat user={props.user} />
     </>
   );
 }

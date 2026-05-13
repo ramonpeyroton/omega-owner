@@ -17,7 +17,7 @@ import {
 import {
   Search, Filter, AlertTriangle, PhoneIncoming, Trash2, Home,
   Mail, MapPin, Zap, Hammer, FileText, CheckCircle2, XCircle,
-  Eye, EyeOff,
+  Eye, EyeOff, ChevronDown, ChevronRight, SlidersHorizontal,
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from './LoadingSpinner';
@@ -363,11 +363,200 @@ function DroppableColumn({ columnId, children, isOver }) {
   );
 }
 
+// ─── Mobile list card ─────────────────────────────────────────────
+// Compact single-row card for the mobile list view. No cover photo,
+// just the key info: name, address, service badge, time, amount.
+function MobileJobCard({ job, estByJob, coiWarningByJob, costByJob, hasUnread, onOpen }) {
+  const col = COLUMN_BY_ID[job.pipeline_status] || COLUMN_BY_ID.new_lead;
+  const address = [job.address, job.city].filter(Boolean).join(', ');
+  const est = estByJob[job.id];
+  const cost = costByJob[job.id];
+  const amount = Number(est?.total_amount) || Number(cost?.estimated_revenue) || 0;
+  const leadSource = (job.lead_source || '').trim();
+
+  return (
+    <button
+      onClick={() => onOpen(job)}
+      className="w-full text-left bg-white rounded-xl border border-gray-200 active:bg-omega-cloud transition-colors px-4 py-3 flex items-center gap-3"
+    >
+      {/* Color dot matching the column */}
+      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: col.hex }} />
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-bold text-omega-charcoal truncate">
+            {job.client_name || job.name || 'Untitled'}
+          </p>
+          {hasUnread && (
+            <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" title="Unread messages" />
+          )}
+          {coiWarningByJob?.has?.(job.id) && (
+            <AlertTriangle className="w-3 h-3 text-amber-500 flex-shrink-0" />
+          )}
+        </div>
+        {address && <p className="text-xs text-omega-stone truncate mt-0.5">{address}</p>}
+        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+          {job.service && (
+            <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+              style={{ background: col.hex + '26', color: col.hex }}>
+              {job.service}
+            </span>
+          )}
+          {leadSource && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">
+              <PhoneIncoming className="w-2.5 h-2.5" />{leadSource}
+            </span>
+          )}
+          <span className="text-[10px] text-omega-stone">{relTime(job.last_touch || job.updated_at || job.created_at)}</span>
+        </div>
+      </div>
+
+      {amount > 0 && (
+        <div className="text-right flex-shrink-0">
+          <p className="text-sm font-black text-omega-charcoal tabular-nums">{fmtMoneyShort(amount)}</p>
+        </div>
+      )}
+    </button>
+  );
+}
+
+// ─── Mobile pipeline list view ────────────────────────────────────
+// Renders each pipeline stage as a collapsible section with job list.
+// Replaces the DnD kanban on screens < 640px. Read-only tap-to-open.
+function MobilePipelineView({
+  visibleJobs, jobsByColumn, estByJob, costByJob, coiWarningByJob,
+  lastReadByJob, searchText, setSearchText, clearFilters,
+  filterCity, setFilterCity, filterService, setFilterService,
+  cityOptions, serviceOptions, onOpenJob,
+}) {
+  const [showFilters, setShowFilters] = useState(false);
+  // Keep track of which sections are expanded. Default: expand all non-empty.
+  const [collapsed, setCollapsed] = useState(() => {
+    const c = {};
+    PIPELINE_COLUMNS.forEach((col) => { c[col.id] = false; }); // all expanded
+    return c;
+  });
+
+  function toggleSection(colId) {
+    setCollapsed((prev) => ({ ...prev, [colId]: !prev[colId] }));
+  }
+
+  const hasFilters = searchText.trim() || filterCity !== 'all' || filterService !== 'all';
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-omega-cloud">
+      {/* Search bar — always visible */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 space-y-2">
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-omega-stone pointer-events-none" />
+            <input
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder="Search client or job…"
+              className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 text-sm focus:border-omega-orange focus:outline-none"
+            />
+          </div>
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-semibold transition-colors ${
+              hasFilters ? 'border-omega-orange text-omega-orange bg-omega-pale' : 'border-gray-200 text-omega-stone'
+            }`}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            {hasFilters ? 'Filtered' : 'Filter'}
+          </button>
+        </div>
+
+        {showFilters && (
+          <div className="space-y-2 pt-1">
+            <select value={filterCity} onChange={(e) => setFilterCity(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:border-omega-orange focus:outline-none">
+              <option value="all">All cities</option>
+              {cityOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={filterService} onChange={(e) => setFilterService(e.target.value)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm focus:border-omega-orange focus:outline-none">
+              <option value="all">All services</option>
+              {serviceOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {hasFilters && (
+              <button onClick={() => { clearFilters(); setShowFilters(false); }}
+                className="w-full py-2 rounded-xl border border-gray-200 text-sm font-semibold text-omega-stone">
+                Clear filters
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Summary chip */}
+      <div className="px-4 py-2">
+        <p className="text-xs text-omega-stone">{visibleJobs.length} job{visibleJobs.length !== 1 ? 's' : ''}</p>
+      </div>
+
+      {/* Stages */}
+      <div className="px-4 pb-6 space-y-3">
+        {PIPELINE_COLUMNS.map((col) => {
+          const list = jobsByColumn[col.id] || [];
+          if (list.length === 0) return null; // hide empty stages on mobile
+          const isCollapsed = collapsed[col.id];
+
+          return (
+            <div key={col.id} className="rounded-2xl overflow-hidden border border-gray-200 bg-white">
+              {/* Stage header */}
+              <button
+                onClick={() => toggleSection(col.id)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left"
+                style={{ background: col.hex + '18' }}
+              >
+                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: col.hex }} />
+                <span className="flex-1 text-sm font-bold text-omega-charcoal">{col.label}</span>
+                <span className="text-xs font-bold px-2 py-0.5 rounded-full text-white" style={{ background: col.hex }}>
+                  {list.length}
+                </span>
+                {isCollapsed
+                  ? <ChevronRight className="w-4 h-4 text-omega-stone flex-shrink-0" />
+                  : <ChevronDown className="w-4 h-4 text-omega-stone flex-shrink-0" />
+                }
+              </button>
+
+              {/* Job list */}
+              {!isCollapsed && (
+                <div className="divide-y divide-gray-100 px-3 pb-3 pt-1 space-y-1.5">
+                  {list.map((job) => (
+                    <MobileJobCard
+                      key={job.id}
+                      job={job}
+                      estByJob={estByJob}
+                      costByJob={costByJob}
+                      coiWarningByJob={coiWarningByJob}
+                      hasUnread={isJobUnread(job, lastReadByJob[job.id])}
+                      onOpen={onOpenJob}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────
 export default function PipelineKanban({
   user, filterBySalesperson = false, readOnly = false,
   onOpenEstimateFlow, onOpenQuestionnaire, onStartNewJobForClient,
 }) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState([]);
   const [estimates, setEstimates] = useState([]);
@@ -834,6 +1023,63 @@ export default function PipelineKanban({
     return (
       <div className="flex-1 flex items-center justify-center">
         <LoadingSpinner size={32} />
+      </div>
+    );
+  }
+
+  // ─── Mobile branch ──────────────────────────────────────────────
+  if (isMobile) {
+    return (
+      <div className="flex-1 overflow-hidden flex flex-col bg-omega-cloud">
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+        <header className="px-4 py-4 bg-white border-b border-gray-200">
+          <h1 className="text-xl font-bold text-omega-charcoal">Pipeline</h1>
+          {loading && <p className="text-xs text-omega-stone mt-1">Loading…</p>}
+        </header>
+
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center"><LoadingSpinner size={32} /></div>
+        ) : (
+          <MobilePipelineView
+            visibleJobs={visibleJobs}
+            jobsByColumn={jobsByColumn}
+            estByJob={estByJob}
+            costByJob={costByJob}
+            coiWarningByJob={coiWarningByJob}
+            lastReadByJob={lastReadByJob}
+            searchText={searchText}
+            setSearchText={setSearchText}
+            clearFilters={clearFilters}
+            filterCity={filterCity}
+            setFilterCity={setFilterCity}
+            filterService={filterService}
+            setFilterService={setFilterService}
+            cityOptions={cityOptions}
+            serviceOptions={serviceOptions}
+            onOpenJob={setOpenJob}
+          />
+        )}
+
+        {openJob && (
+          <JobFullView
+            job={openJob}
+            user={user}
+            onClose={() => setOpenJob(null)}
+            onJobUpdated={(updated) => {
+              setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
+              setOpenJob(updated);
+            }}
+            onJobDeleted={(deleted) => {
+              setJobs((prev) => prev.filter((j) => j.id !== deleted.id));
+              setOpenJob(null);
+              setToast({ type: 'success', message: 'Job deleted successfully' });
+            }}
+            onOpenEstimateFlow={onOpenEstimateFlow}
+            onOpenQuestionnaire={onOpenQuestionnaire}
+            onStartNewJobForClient={onStartNewJobForClient}
+          />
+        )}
       </div>
     );
   }

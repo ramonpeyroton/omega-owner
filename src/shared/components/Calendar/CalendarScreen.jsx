@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DndContext, PointerSensor, TouchSensor, useSensor, useSensors, closestCenter,
 } from '@dnd-kit/core';
-import { Filter, Plus, CalendarDays } from 'lucide-react';
+import { Filter, Plus, CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import {
   loadEventsForMonth,
@@ -44,6 +44,146 @@ import { CATEGORY_ORDER } from '../../lib/eventCategories';
 
 const ALL_KINDS = Object.keys(EVENT_KIND_META);
 
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const DAY_SHORT   = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+// ─── Mobile Agenda View ────────────────────────────────────────────
+// Groups events by date and renders them as a readable list — much
+// better than a 7-column month grid on a 390px screen.
+function MobileAgendaView({
+  year, monthIndex, filteredEvents, loading,
+  prevMonth, nextMonth, gotoToday,
+  onDayClick, onNewEvent, canCreate,
+}) {
+  // Build list of events in the current month + 15 days ahead,
+  // sorted by starts_at. Group by YYYY-MM-DD.
+  const grouped = useMemo(() => {
+    const startOfMonth = new Date(year, monthIndex, 1);
+    const endWindow    = new Date(year, monthIndex + 2, 15); // ~6 weeks
+    const inRange = (filteredEvents || [])
+      .filter((e) => {
+        const d = new Date(e.starts_at);
+        return d >= startOfMonth && d <= endWindow;
+      })
+      .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at));
+
+    const groups = [];
+    const seen = new Map();
+    inRange.forEach((e) => {
+      const iso = isoDateCT(new Date(e.starts_at));
+      if (!seen.has(iso)) { seen.set(iso, []); groups.push(iso); }
+      seen.get(iso).push(e);
+    });
+    return groups.map((iso) => ({ iso, events: seen.get(iso) }));
+  }, [filteredEvents, year, monthIndex]);
+
+  const todayIso = isoDateCT(new Date());
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-omega-cloud">
+      {/* Month navigation header */}
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+        <button onClick={prevMonth} className="p-2 rounded-xl border border-gray-200 text-omega-stone">
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <div className="flex-1 text-center">
+          <p className="text-base font-bold text-omega-charcoal">
+            {MONTH_NAMES[monthIndex]} {year}
+          </p>
+        </div>
+        <button onClick={nextMonth} className="p-2 rounded-xl border border-gray-200 text-omega-stone">
+          <ChevronRight className="w-4 h-4" />
+        </button>
+        <button onClick={gotoToday}
+          className="px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-omega-stone">
+          Today
+        </button>
+      </div>
+
+      {loading && (
+        <p className="text-xs text-omega-stone text-center py-6">Loading…</p>
+      )}
+
+      {!loading && grouped.length === 0 && (
+        <div className="px-4 py-12 text-center">
+          <CalendarDays className="w-10 h-10 text-omega-fog mx-auto mb-3" />
+          <p className="text-sm font-semibold text-omega-charcoal">No events this month</p>
+          {canCreate && (
+            <button onClick={() => onNewEvent(null)}
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-omega-orange text-white text-sm font-semibold">
+              <Plus className="w-4 h-4" /> New Event
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="px-4 py-4 space-y-4 pb-24">
+        {grouped.map(({ iso, events }) => {
+          const d = new Date(iso + 'T12:00:00');
+          const isToday = iso === todayIso;
+          return (
+            <div key={iso}>
+              {/* Date header */}
+              <div className={`flex items-center gap-2 mb-2 ${isToday ? 'text-omega-orange' : 'text-omega-charcoal'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
+                  isToday ? 'bg-omega-orange text-white' : 'bg-white border border-gray-200 text-omega-charcoal'
+                }`}>
+                  {d.getDate()}
+                </div>
+                <div>
+                  <p className={`text-xs font-bold uppercase tracking-wider ${isToday ? 'text-omega-orange' : 'text-omega-stone'}`}>
+                    {DAY_SHORT[d.getDay()]} · {MONTH_NAMES[d.getMonth()].slice(0,3)}
+                    {isToday && ' · Today'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => onDayClick(iso)}
+                  className="ml-auto text-[10px] font-semibold text-omega-orange"
+                >
+                  View day
+                </button>
+              </div>
+
+              {/* Events for this day */}
+              <div className="space-y-2">
+                {events.map((e) => {
+                  const meta = eventDisplayMeta(e);
+                  return (
+                    <button
+                      key={e.id}
+                      onClick={() => onDayClick(iso)}
+                      className="w-full text-left rounded-xl border border-gray-200 bg-white px-4 py-3 flex items-start gap-3 active:bg-omega-cloud transition-colors"
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1.5" style={{ background: meta.color }} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-omega-charcoal truncate">{e.title}</p>
+                        <p className="text-xs text-omega-stone mt-0.5">
+                          {e.all_day ? 'All day' : formatTimeCT(new Date(e.starts_at))}
+                          {e.location && ` · ${e.location}`}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* FAB — New Event */}
+      {canCreate && (
+        <button
+          onClick={() => onNewEvent(null)}
+          className="fixed bottom-20 right-4 z-20 w-14 h-14 rounded-full bg-omega-orange hover:bg-omega-dark text-white shadow-lg flex items-center justify-center"
+        >
+          <Plus className="w-6 h-6" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function CalendarScreen({
   user,
   initialJobForVisit = null,
@@ -54,6 +194,12 @@ export default function CalendarScreen({
   const [monthIndex, setMonth] = useState(today.getMonth());
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
+  useEffect(() => {
+    const h = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener('resize', h);
+    return () => window.removeEventListener('resize', h);
+  }, []);
 
   const [drawerIso, setDrawerIso] = useState(null);
   const [formState, setFormState] = useState(null); // { iso, prefillJob, event }
@@ -192,6 +338,46 @@ export default function CalendarScreen({
   }
 
   const allKindsOn = visibleKinds.size === ALL_KINDS.length;
+
+  // ─── Mobile: show agenda list instead of month grid ───────────────
+  if (isMobile) {
+    return (
+      <>
+        <MobileAgendaView
+          year={year}
+          monthIndex={monthIndex}
+          filteredEvents={filteredEvents}
+          loading={loading}
+          prevMonth={prevMonth}
+          nextMonth={nextMonth}
+          gotoToday={gotoToday}
+          onDayClick={setDrawerIso}
+          onNewEvent={openNewEvent}
+          canCreate={canCreate}
+        />
+        {drawerIso && (
+          <DayDrawer
+            iso={drawerIso}
+            user={user}
+            onClose={() => setDrawerIso(null)}
+            onCreate={(iso) => { setDrawerIso(null); setFormState({ iso, prefillJob: null, event: null }); }}
+            onEdit={(event) => { setDrawerIso(null); setFormState({ iso: null, prefillJob: null, event }); }}
+            onChanged={refresh}
+          />
+        )}
+        {formState && (
+          <EventForm
+            user={user}
+            initialIso={formState.iso}
+            initialEvent={formState.event}
+            prefillJob={formState.prefillJob}
+            onClose={() => setFormState(null)}
+            onSaved={(saved) => { setFormState(null); refresh(); onVisitScheduled?.(saved); }}
+          />
+        )}
+      </>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto bg-omega-cloud">

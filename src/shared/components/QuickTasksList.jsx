@@ -140,7 +140,7 @@ export default function QuickTasksList({ user }) {
       <div className="flex items-center justify-between px-4 py-3 bg-amber-50/60 border-b border-amber-100">
         <div className="flex items-center gap-2">
           <ListChecks className="w-4 h-4 text-amber-600" />
-          <h2 className="text-sm font-bold text-omega-charcoal tracking-tight">My Punch List</h2>
+          <h2 className="text-sm font-bold text-omega-charcoal tracking-tight">To Do List</h2>
           <span className="text-[10px] font-bold text-amber-700 bg-white/70 px-2 py-0.5 rounded-full">
             {openCount}{doneCount > 0 ? ` · ${doneCount} done` : ''}
           </span>

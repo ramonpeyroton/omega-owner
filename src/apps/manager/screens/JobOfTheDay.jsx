@@ -237,15 +237,15 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
           </button>
         </header>
 
-        {/* ─── 3 KPI cards ───────────────────────────────────── */}
-        <section className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+        {/* ─── 3 compact KPI cards — always 3 cols ───────────── */}
+        <section className="grid grid-cols-3 gap-2">
           <KpiCard
             icon={Briefcase}
             iconBg="bg-orange-100"
             iconColor="text-omega-orange"
             value={jobsTodayCount}
             label="Jobs Today"
-            subtitle={jobsInProgressLabel}
+            onClick={() => onNavigate?.('dashboard')}
           />
           <KpiCard
             icon={AlertTriangle}
@@ -253,7 +253,7 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
             iconColor="text-red-500"
             value={issuesCount}
             label="Issues"
-            subtitle={issuesCount > 0 ? 'Need attention' : 'All clear'}
+            onClick={() => document.getElementById('manager-issues')?.scrollIntoView({ behavior: 'smooth' })}
           />
           <KpiCard
             icon={CalendarDays}
@@ -261,58 +261,50 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
             iconColor="text-violet-600"
             value={eventsToday}
             label="Events"
-            subtitle={eventsToday > 0 ? 'On schedule' : 'Nothing scheduled'}
+            onClick={() => onNavigate?.('calendar')}
           />
         </section>
 
-        {/* ─── 4 Quick Action tiles ──────────────────────────── */}
-        <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        {/* ─── Quick Actions — single row, compact icons ─────── */}
+        <section className="grid grid-cols-4 gap-2">
           <ActionTile
             icon={Plus}
             label="Add Task"
+            sublabel="New task"
             color="bg-omega-orange"
-            onClick={() => {
-              // Smooth-scroll to the Punch List section so Gabriel
-              // can drop the new task right in.
-              document.getElementById('manager-punch-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }}
+            onClick={() => document.getElementById('manager-punch-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
           <ActionTile
             icon={Box}
             label="Materials"
+            sublabel="Buy list"
             color="bg-emerald-500"
             onClick={() => onNavigate?.('materials-run')}
           />
           <ActionTile
             icon={Camera}
-            label="Add Photo"
+            label="Receipt"
+            sublabel="Snap photo"
             color="bg-blue-500"
-            onClick={() => {
-              // Photos live inside each job's Phases tab. Pop the
-              // user into Jobs so they can pick which job the photo
-              // belongs to — matches the existing flow.
-              onNavigate?.('dashboard');
-            }}
+            onClick={() => document.getElementById('manager-jobs-today')?.scrollIntoView({ behavior: 'smooth' })}
           />
           <ActionTile
-            icon={Clock}
-            label="Log Time"
+            icon={Calendar}
+            label="Schedule"
+            sublabel="Calendar"
             color="bg-violet-500"
-            onClick={() => onNavigate?.('dashboard')}
+            onClick={() => onNavigate?.('calendar')}
           />
         </section>
 
-        {/* ─── Issues That Need Attention ─────────────────────── */}
+        {/* ─── Issues That Need Attention (only when there are some) */}
         {issues.length > 0 && (
-          <section className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5">
+          <section id="manager-issues" className="bg-white rounded-2xl border border-gray-100 shadow-card p-4">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-base font-bold text-omega-charcoal inline-flex items-center gap-2">
+              <h2 className="text-sm font-bold text-omega-charcoal inline-flex items-center gap-2">
                 Issues That Need Attention
                 <span className="text-[11px] font-bold text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{issues.length}</span>
               </h2>
-              <button onClick={() => onNavigate?.('dashboard')} className="text-xs font-semibold text-omega-orange hover:text-omega-dark inline-flex items-center gap-0.5">
-                View all <ChevronRight className="w-3 h-3" />
-              </button>
             </div>
             <ul className="divide-y divide-gray-100">
               {issues.map((it) => {
@@ -324,14 +316,13 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
                     : { bg: 'bg-omega-pale', icon: 'text-omega-orange' };
                 return (
                   <li key={it.id} className="py-2.5 flex items-center gap-3">
-                    <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${tone.bg}`}>
+                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${tone.bg}`}>
                       <Icon className={`w-4 h-4 ${tone.icon}`} />
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-semibold text-omega-charcoal truncate">{it.title}</p>
-                      <p className="text-[12px] text-omega-stone truncate">{it.subtitle}</p>
+                      <p className="text-[11px] text-omega-stone truncate">{it.subtitle}</p>
                     </div>
-                    <ChevronRight className="w-4 h-4 text-omega-stone" />
                   </li>
                 );
               })}
@@ -339,8 +330,13 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
           </section>
         )}
 
+        {/* ─── To Do List ─────────────────────────────────────── */}
+        <section id="manager-punch-list">
+          <QuickTasksList user={user} />
+        </section>
+
         {/* ─── Today's Jobs ──────────────────────────────────── */}
-        <section className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5">
+        <section id="manager-jobs-today" className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-bold text-omega-charcoal">Today's Jobs</h2>
             <button onClick={() => onNavigate?.('calendar')} className="text-xs font-semibold text-omega-orange hover:text-omega-dark">
@@ -387,8 +383,6 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
                       {onTrack ? 'On Track' : 'At Risk'}
                     </span>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {/* Open → JobFullView (the tabbed project view: Daily
-                          Logs, Estimate, Phases, Documents, etc). */}
                       <button
                         onClick={() => onOpenFullJob?.(j)}
                         className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-omega-orange text-[11px] font-bold text-omega-charcoal"
@@ -396,11 +390,6 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
                       >
                         <FolderOpen className="w-3.5 h-3.5" /> Open
                       </button>
-                      {/* Update + Issue both jump straight into the Phase
-                          Breakdown — Gabriel's working surface. The Issue
-                          button is just a visual variant; both land on the
-                          same screen since flagging an issue happens
-                          inside the phase board today. */}
                       <button
                         onClick={() => onSelectJob?.(j)}
                         className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-gray-200 hover:border-omega-orange text-[11px] font-bold text-omega-charcoal"
@@ -415,12 +404,6 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
                       >
                         <AlertTriangle className="w-3.5 h-3.5" /> Issue
                       </button>
-                      {/* Receipts → quick-capture flow. Slightly bigger +
-                          orange so Gabriel's eye lands on it after a
-                          purchase run. Triggers ReceiptCaptureModal,
-                          which opens the phone camera, asks for the
-                          amount, and writes to job_documents +
-                          job_expenses in one shot. */}
                       <button
                         onClick={() => setReceiptJob(j)}
                         className="inline-flex items-center gap-1 px-2.5 py-2 rounded-lg bg-omega-orange hover:bg-omega-dark text-white text-[12px] font-bold shadow-sm"
@@ -436,9 +419,8 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
           )}
         </section>
 
-        {/* ─── Punch List + Materials Run (2 cols) ────────────── */}
-        <section id="manager-punch-list" className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <QuickTasksList user={user} />
+        {/* ─── Materials Run ──────────────────────────────────── */}
+        <section>
           <MaterialsInline
             byStore={byStore}
             totalCount={materials.length}
@@ -466,33 +448,34 @@ export default function JobOfTheDay({ user, onNavigate, onSelectJob, onOpenFullJ
   );
 }
 
-// ─── KPI card ────────────────────────────────────────────────────────
-function KpiCard({ icon: Icon, iconBg, iconColor, value, label, subtitle }) {
-  return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-card p-4 sm:p-5 flex items-center gap-3 sm:gap-4">
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${iconBg}`}>
-        <Icon className={`w-6 h-6 ${iconColor}`} />
-      </div>
-      <div className="min-w-0">
-        <p className="text-3xl font-black text-omega-charcoal tabular-nums leading-none">{value}</p>
-        <p className="text-sm font-bold text-omega-charcoal mt-1">{label}</p>
-        <p className="text-xs text-omega-stone mt-0.5">{subtitle}</p>
-      </div>
-    </div>
-  );
-}
-
-// ─── Quick Action tile ───────────────────────────────────────────────
-function ActionTile({ icon: Icon, label, color, onClick }) {
+// ─── KPI card — compact, always 3-column on mobile ───────────────────
+function KpiCard({ icon: Icon, iconBg, iconColor, value, label, onClick }) {
   return (
     <button
       onClick={onClick}
-      className="bg-white rounded-2xl border border-gray-100 shadow-card hover:shadow-card-hover hover:-translate-y-0.5 transition-all p-4 sm:p-5 flex flex-col items-center gap-2"
+      className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex flex-col items-center text-center gap-1 active:scale-95 transition-transform w-full"
     >
-      <span className={`w-12 h-12 rounded-full ${color} flex items-center justify-center text-white shadow-md`}>
-        <Icon className="w-6 h-6" />
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${iconBg}`}>
+        <Icon className={`w-4 h-4 ${iconColor}`} />
+      </div>
+      <p className="text-2xl font-black text-omega-charcoal tabular-nums leading-none">{value}</p>
+      <p className="text-[11px] font-semibold text-omega-stone leading-tight">{label}</p>
+    </button>
+  );
+}
+
+// ─── Quick Action tile — compact, single-row ─────────────────────────
+function ActionTile({ icon: Icon, label, sublabel, color, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-card-hover active:scale-95 transition-all p-2.5 flex flex-col items-center gap-1.5 w-full"
+    >
+      <span className={`w-10 h-10 rounded-full ${color} flex items-center justify-center text-white shadow-sm`}>
+        <Icon className="w-5 h-5" />
       </span>
-      <span className="text-sm font-bold text-omega-charcoal">{label}</span>
+      <span className="text-[11px] font-bold text-omega-charcoal leading-tight text-center">{label}</span>
+      {sublabel && <span className="text-[10px] text-omega-stone leading-tight text-center">{sublabel}</span>}
     </button>
   );
 }

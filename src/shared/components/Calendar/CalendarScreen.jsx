@@ -29,6 +29,8 @@ import {
   canEditKind,
   updateEvent,
   isoDateCT,
+  eventDisplayMeta,
+  formatTimeCT,
 } from '../../lib/calendar';
 import { logAudit } from '../../lib/audit';
 import MonthView from './MonthView';

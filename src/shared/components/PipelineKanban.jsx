@@ -425,7 +425,7 @@ function MobileJobCard({ job, estByJob, anyEstByJob, coiWarningByJob, costByJob,
 // Renders each pipeline stage as a collapsible section with job list.
 // Replaces the DnD kanban on screens < 640px. Read-only tap-to-open.
 function MobilePipelineView({
-  visibleJobs, jobsByColumn, estByJob, costByJob, coiWarningByJob,
+  visibleJobs, jobsByColumn, estByJob, anyEstByJob, costByJob, coiWarningByJob,
   lastReadByJob, searchText, setSearchText, clearFilters,
   filterCity, setFilterCity, filterService, setFilterService,
   cityOptions, serviceOptions, onOpenJob,
@@ -1063,6 +1063,7 @@ export default function PipelineKanban({
             visibleJobs={visibleJobs}
             jobsByColumn={jobsByColumn}
             estByJob={estByJob}
+            anyEstByJob={anyEstByJob}
             costByJob={costByJob}
             coiWarningByJob={coiWarningByJob}
             lastReadByJob={lastReadByJob}

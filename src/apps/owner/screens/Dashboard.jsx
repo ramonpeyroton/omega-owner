@@ -997,7 +997,7 @@ export default function Dashboard({ user, onSelectJob, onNavigate }) {
         {/* ─── Cash & Payments + Action Center ──────────────────── */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <CashAndPayments payments={data.payments} totalReceivable={data.totalReceivable} />
-          <ActionCenter actions={data.actions} />
+          <ActionCenter actions={data.actions} onNavigate={onNavigate} />
         </section>
 
         <p className="text-[11px] text-omega-stone text-center pt-2">
@@ -1381,7 +1381,7 @@ function BottlenecksPanel({ bottlenecks }) {
 }
 
 // ─── Action Center ───────────────────────────────────────────────
-function ActionCenter({ actions }) {
+function ActionCenter({ actions, onNavigate }) {
   const priorityCls = {
     high:   'bg-red-100 text-red-700 border-red-200',
     medium: 'bg-amber-100 text-amber-800 border-amber-200',
@@ -1392,11 +1392,21 @@ function ActionCenter({ actions }) {
     medium: 'border border-gray-200 hover:border-omega-orange text-omega-charcoal',
     low:    'border border-gray-200 hover:border-omega-orange text-omega-charcoal',
   };
+
+  // Where each action type navigates to
+  const actionTarget = (a) => {
+    if (a.icon === 'invoice')  return 'finance';
+    if (a.icon === 'estimate') return 'pipeline';
+    if (a.icon === 'budget')   return 'pipeline';
+    if (a.icon === 'call')     return 'pipeline';
+    return null;
+  };
+
   const buttonLabel = (a) => {
-    if (a.icon === 'invoice') return 'Take Action';
+    if (a.icon === 'invoice')  return 'Go to Finance';
     if (a.icon === 'estimate') return 'Review';
-    if (a.icon === 'budget') return 'Review';
-    if (a.icon === 'call') return 'Call';
+    if (a.icon === 'budget')   return 'Review';
+    if (a.icon === 'call')     return 'View Pipeline';
     return 'View';
   };
 
@@ -1412,28 +1422,32 @@ function ActionCenter({ actions }) {
         <p className="text-sm text-omega-stone italic py-6 text-center">Inbox zero. Nothing pending.</p>
       ) : (
         <ul className="divide-y divide-gray-100">
-          {actions.map((a) => (
-            <li key={a.id} className="py-2.5 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-omega-charcoal truncate">{a.title}</p>
-                <p className="text-[11px] text-omega-stone truncate">{a.subtitle}</p>
-              </div>
-              <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border flex-shrink-0 ${priorityCls[a.priority] || priorityCls.medium}`}>
-                {a.priority}
-              </span>
-              {a.due && (
-                <span className="text-[11px] font-semibold text-omega-stone tabular-nums flex-shrink-0">
-                  {new Date(a.due).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+          {actions.map((a) => {
+            const target = actionTarget(a);
+            return (
+              <li key={a.id} className="py-2.5 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-omega-charcoal truncate">{a.title}</p>
+                  <p className="text-[11px] text-omega-stone truncate">{a.subtitle}</p>
+                </div>
+                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border flex-shrink-0 ${priorityCls[a.priority] || priorityCls.medium}`}>
+                  {a.priority}
                 </span>
-              )}
-              <button
-                type="button"
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex-shrink-0 ${buttonCls[a.priority] || buttonCls.medium}`}
-              >
-                {buttonLabel(a)}
-              </button>
-            </li>
-          ))}
+                {a.due && (
+                  <span className="text-[11px] font-semibold text-omega-stone tabular-nums flex-shrink-0">
+                    {new Date(a.due).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={target ? () => onNavigate?.(target) : undefined}
+                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex-shrink-0 transition-opacity ${buttonCls[a.priority] || buttonCls.medium} ${!target ? 'opacity-40 cursor-default' : ''}`}
+                >
+                  {buttonLabel(a)}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -641,8 +641,70 @@ function ClientsTab({ user, accounts }) {
   const drawerRow = contractRows.find((r) => r.contract.id === drawerContractId);
   const totalReceived = receivedRows.reduce((s, r) => s + Number(r.milestone.received_amount || 0), 0);
 
+  // Overdue milestones — flat list with contract/job context, sorted by most overdue first
+  const overdueItems = [];
+  contractRows.forEach(({ contract, job, milestones }) => {
+    milestones.forEach((m) => {
+      if (effectiveStatus(m) === 'overdue') {
+        const remaining = (Number(m.due_amount) || 0) - (Number(m.received_amount) || 0);
+        if (remaining > 0) {
+          const daysPast = m.due_date
+            ? Math.floor((Date.now() - new Date(m.due_date).getTime()) / 86400000)
+            : 0;
+          overdueItems.push({ milestone: m, contract, job, remaining, daysPast });
+        }
+      }
+    });
+  });
+  overdueItems.sort((a, b) => b.daysPast - a.daysPast);
+
+  // Contracts sorted: overdue first, then by signed date
+  const sortedContractRows = [...contractRows].sort(
+    (a, b) => b.totals.overdueCount - a.totals.overdueCount,
+  );
+
   return (
     <div className="space-y-5">
+
+      {/* ── Overdue alert — shown only when there are overdue milestones ── */}
+      {overdueItems.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-red-200 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+            <p className="font-bold text-red-700 text-sm">
+              {overdueItems.length} Overdue {overdueItems.length === 1 ? 'Invoice' : 'Invoices'}
+            </p>
+            <span className="ml-auto text-sm font-bold text-red-700">
+              {money(overdueItems.reduce((s, i) => s + i.remaining, 0))} outstanding
+            </span>
+          </div>
+          <div className="divide-y divide-red-100">
+            {overdueItems.map(({ milestone: m, contract, job, remaining, daysPast }) => (
+              <button
+                key={m.id}
+                onClick={() => setDrawerContractId(contract.id)}
+                className="w-full text-left px-4 py-3 hover:bg-red-100 transition flex items-center gap-4"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-omega-charcoal text-sm truncate">
+                    {job.client_name || '—'}
+                  </p>
+                  <p className="text-[11px] text-red-600 truncate">
+                    {m.label || `Installment ${(m.order_idx || 0) + 1}`}
+                    {' · '}{daysPast} {daysPast === 1 ? 'day' : 'days'} overdue
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-sm font-bold text-red-700">{money(remaining)}</p>
+                  <p className="text-[11px] text-omega-stone">due {shortDate(m.due_date)}</p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-red-400 flex-shrink-0" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Received payments flat list */}
       <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -696,7 +758,7 @@ function ClientsTab({ user, accounts }) {
           </div>
         ) : (
           <div className="space-y-3">
-            {contractRows.map((r) => (
+            {sortedContractRows.map((r) => (
               <ContractCard key={r.contract.id} row={r} onOpen={() => setDrawerContractId(r.contract.id)} />
             ))}
           </div>

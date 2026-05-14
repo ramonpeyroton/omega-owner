@@ -363,11 +363,17 @@ export default function Dashboard({ user, onSelectJob, onNavigate }) {
           return ts >= start && ts < end;
         }).length;
 
+        // Estimates Sent: only count jobs that have an actual estimate created
+        // this period. Do NOT fall back to j.created_at — that inflates the
+        // count by including every job in an advanced stage that was created
+        // this month (even ones with no estimate at all).
         const monthEstSent = jobs.filter((j) => {
-          if (!['estimate_sent', 'estimate_negotiating', 'estimate_approved', 'contract_sent', 'contract_signed', 'in_progress', 'completed', 'estimate_rejected'].includes(j.pipeline_status)) return false;
-          // Use estimate creation date — more meaningful than job updated_at
+          if (!['estimate_sent', 'estimate_negotiating', 'estimate_approved',
+                'contract_sent', 'contract_signed', 'in_progress',
+                'completed', 'estimate_rejected'].includes(j.pipeline_status)) return false;
           const est = latestEstByJob[j.id];
-          const ts = new Date(est?.created_at || j.created_at);
+          if (!est?.created_at) return false; // must have an actual estimate
+          const ts = new Date(est.created_at);
           return ts >= start && ts < end;
         }).length;
 
@@ -437,7 +443,9 @@ export default function Dashboard({ user, onSelectJob, onNavigate }) {
             ? new Date(est.signed_at)
             : new Date(est?.created_at || j.created_at);
           if (ts < start || ts >= end) continue;
-          const name = j.assigned_to || 'Unassigned';
+          // Jobs created via Sales app store salesperson_name, not assigned_to.
+          // Fall through both fields before labelling as Unassigned.
+          const name = j.assigned_to || j.salesperson_name || 'Unassigned';
           const amount = Number(est?.total_amount) || 0;
           const acc = salesByPerson.get(name) || { name, count: 0, revenue: 0 };
           acc.count += 1;
@@ -1560,34 +1568,63 @@ function FinancialChart({ series }) {
 }
 
 // ─── Salesman Performance ────────────────────────────────────────
+const SALESMAN_MEDALS = ['🥇', '🥈', '🥉'];
+
 function SalesmanPerformance({ salesmen }) {
+  const maxRev = Math.max(1, ...salesmen.map((s) => s.revenue));
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-card p-5">
-      <h2 className="text-base font-bold text-omega-charcoal mb-3">Salesman Performance</h2>
+      <h2 className="text-base font-bold text-omega-charcoal mb-4">Salesman Performance</h2>
       {salesmen.length === 0 ? (
         <p className="text-sm text-omega-stone italic py-6 text-center">No closed deals this month.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[300px]">
-            <thead>
-              <tr className="text-[10px] font-bold uppercase tracking-wider text-omega-stone">
-                <th className="text-left py-1.5">Salesman</th>
-                <th className="text-right py-1.5">Closed</th>
-                <th className="text-right py-1.5">Revenue</th>
-                <th className="text-right py-1.5">Avg Deal</th>
-              </tr>
-            </thead>
-            <tbody>
-              {salesmen.map((s) => (
-                <tr key={s.name} className="border-t border-gray-100">
-                  <td className="py-2 text-sm font-bold text-omega-charcoal truncate max-w-[140px]">{s.name}</td>
-                  <td className="py-2 text-right text-sm tabular-nums">{s.count}</td>
-                  <td className="py-2 text-right text-sm tabular-nums">{fmtMoney(s.revenue)}</td>
-                  <td className="py-2 text-right text-sm tabular-nums">{fmtMoney(s.avg)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="space-y-2">
+          {salesmen.map((s, i) => {
+            const isUnassigned = s.name === 'Unassigned';
+            const barPct = s.revenue > 0 ? Math.round((s.revenue / maxRev) * 100) : 0;
+            return (
+              <div
+                key={s.name}
+                className={`rounded-xl p-3 ${isUnassigned ? 'bg-gray-50 opacity-60' : 'bg-omega-cloud'}`}
+              >
+                {/* Top row: name + stats */}
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-base leading-none flex-shrink-0">
+                      {isUnassigned ? '—' : (SALESMAN_MEDALS[i] || '·')}
+                    </span>
+                    <p className={`text-sm font-bold truncate ${isUnassigned ? 'text-omega-stone italic' : 'text-omega-charcoal'}`}>
+                      {s.name}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="text-center min-w-[32px]">
+                      <p className="text-[9px] font-bold text-omega-stone uppercase tracking-wider leading-none mb-0.5">Closed</p>
+                      <p className="text-sm font-black text-omega-charcoal tabular-nums">{s.count}</p>
+                    </div>
+                    <div className="text-center min-w-[60px]">
+                      <p className="text-[9px] font-bold text-omega-stone uppercase tracking-wider leading-none mb-0.5">Revenue</p>
+                      <p className="text-sm font-black text-omega-charcoal tabular-nums">{fmtMoney(s.revenue)}</p>
+                    </div>
+                    <div className="text-center min-w-[50px]">
+                      <p className="text-[9px] font-bold text-omega-stone uppercase tracking-wider leading-none mb-0.5">Avg Deal</p>
+                      <p className="text-sm font-black text-omega-charcoal tabular-nums">{fmtMoney(s.avg)}</p>
+                    </div>
+                  </div>
+                </div>
+                {/* Revenue bar */}
+                {!isUnassigned && (
+                  <div className="h-1.5 rounded-full bg-gray-200 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-omega-orange transition-all"
+                      style={{ width: `${barPct}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1724,24 +1761,84 @@ function PayRow({ icon: Icon, iconColor, label, subtitle, value, valueClass = 't
   );
 }
 
-// ─── Funnel — pure CSS pyramid with proportional widths ─────────
+// ─── Funnel — card-per-step with conversion arrows ──────────────
 function Funnel({ steps }) {
   const max = Math.max(1, ...steps.map((s) => s.value));
   return (
-    <div className="space-y-2">
+    <div className="space-y-1">
       {steps.map((s, i) => {
-        // Each step is ~12% narrower than the one above; floor at 35%.
-        const widthByOrder = Math.max(35, 100 - i * 18);
-        const widthByValue = max > 0 ? Math.max(35, (s.value / max) * 100) : widthByOrder;
-        const width = Math.min(widthByOrder, widthByValue + 5); // visual cap so funnel narrows
+        const barPct   = max > 0 ? Math.max(4, Math.round((s.value / max) * 100)) : 4;
+        const fromPrev = i > 0 && steps[i - 1].value > 0
+          ? Math.round((s.value / steps[i - 1].value) * 100)
+          : null;
         return (
-          <div key={s.label} className="flex items-center justify-center">
+          <div key={s.label}>
+            {/* ── Conversion arrow between steps ── */}
+            {fromPrev !== null && (
+              <div className="flex items-center gap-1.5 px-3 py-1">
+                <svg width="10" height="14" className="flex-shrink-0 opacity-40">
+                  <line x1="5" y1="0" x2="5" y2="8" stroke="#6B7280" strokeWidth="1.5" />
+                  <polygon points="1,8 9,8 5,13" fill="#6B7280" />
+                </svg>
+                <span className="text-[10px] font-semibold text-omega-stone">
+                  {fromPrev}% conversion
+                </span>
+              </div>
+            )}
+
+            {/* ── Step card ── */}
             <div
-              className="rounded-lg shadow-sm py-2.5 px-3 flex items-center justify-between"
-              style={{ background: s.color + '33', borderLeft: `3px solid ${s.color}`, width: `${width}%` }}
+              className="rounded-xl overflow-hidden"
+              style={{ border: `1.5px solid ${s.color}30` }}
             >
-              <span className="text-[11px] font-bold uppercase tracking-wider text-omega-charcoal">{s.label}</span>
-              <span className="text-base font-black text-omega-charcoal tabular-nums">{s.value}</span>
+              <div
+                className="relative flex items-center gap-3 px-3 py-2.5"
+                style={{ background: `${s.color}12` }}
+              >
+                {/* Bottom fill bar shows relative proportion */}
+                <div
+                  className="absolute bottom-0 left-0 h-[3px] rounded-full"
+                  style={{ width: `${barPct}%`, background: `${s.color}90` }}
+                />
+
+                {/* Large number */}
+                <span
+                  className="text-3xl font-black tabular-nums leading-none flex-shrink-0 w-12 text-right"
+                  style={{ color: s.color }}
+                >
+                  {s.value}
+                </span>
+
+                {/* Divider */}
+                <div className="w-px h-7 flex-shrink-0" style={{ background: `${s.color}35` }} />
+
+                {/* Label + mini bar */}
+                <div className="flex-1 min-w-0">
+                  <p
+                    className="text-[11px] font-bold uppercase tracking-widest leading-none"
+                    style={{ color: `${s.color}CC` }}
+                  >
+                    {s.label}
+                  </p>
+                  <div
+                    className="mt-2 h-1 rounded-full overflow-hidden"
+                    style={{ background: `${s.color}20` }}
+                  >
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${barPct}%`, background: s.color }}
+                    />
+                  </div>
+                </div>
+
+                {/* % of max step */}
+                <span
+                  className="text-[10px] font-bold flex-shrink-0 tabular-nums"
+                  style={{ color: `${s.color}80` }}
+                >
+                  {barPct}%
+                </span>
+              </div>
             </div>
           </div>
         );

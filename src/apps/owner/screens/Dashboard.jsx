@@ -62,6 +62,15 @@ function fmtMoney(n) {
   return Number(n).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 }
 
+// Compact money for tight spaces — $45K, $1.2M, $800
+function fmtMoneyCompact(n) {
+  if (n == null || isNaN(n)) return '—';
+  const v = Number(n);
+  if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(v) >= 1_000)     return `$${Math.round(v / 1000)}K`;
+  return `$${Math.round(v)}`;
+}
+
 function fmtPct(n) {
   if (n == null || isNaN(n)) return '—';
   return `${Math.round(n)}%`;
@@ -1002,13 +1011,48 @@ export default function Dashboard({ user, onSelectJob, onNavigate }) {
 // ─── Mobile Owner Dashboard ───────────────────────────────────────
 function MobileOwnerDashboard({ data, bounds, revenueDelta, profitDelta, closeRateDelta, lastMonthAbbr, onSelectJob, onNavigate, onRefresh }) {
   const kpis = [
-    { label: 'Revenue MTD',     value: fmtMoney(data.revenueMTD),       color: 'bg-omega-orange',  delta: revenueDelta },
-    { label: 'Profit MTD',      value: fmtMoney(data.profitMTD),        color: 'bg-emerald-600',   delta: profitDelta,
-      negative: data.profitMTD < 0 },
-    { label: 'Active Jobs',     value: String(data.activeJobsCount),     color: 'bg-blue-600',      delta: null },
-    { label: 'Pipeline Value',  value: fmtMoney(data.pipelineValue),     color: 'bg-violet-600',    delta: null },
-    { label: 'Close Rate',      value: fmtPct(data.closeRateMTD),        color: 'bg-amber-500',     delta: closeRateDelta },
-    { label: 'To Receive',      value: fmtMoney(data.totalReceivable),   color: 'bg-slate-600',     delta: null },
+    {
+      label: 'Revenue',
+      value: fmtMoneyCompact(data.revenueMTD),
+      accent: 'border-orange-400',
+      valueColor: 'text-omega-charcoal',
+      delta: revenueDelta,
+    },
+    {
+      label: 'Profit',
+      value: fmtMoneyCompact(data.profitMTD),
+      accent: data.profitMTD < 0 ? 'border-red-500' : 'border-emerald-400',
+      valueColor: data.profitMTD < 0 ? 'text-red-600' : 'text-emerald-700',
+      delta: profitDelta,
+    },
+    {
+      label: 'Jobs',
+      value: String(data.activeJobsCount),
+      accent: 'border-blue-400',
+      valueColor: 'text-omega-charcoal',
+      delta: null,
+    },
+    {
+      label: 'Pipeline',
+      value: fmtMoneyCompact(data.pipelineValue),
+      accent: 'border-violet-400',
+      valueColor: 'text-omega-charcoal',
+      delta: null,
+    },
+    {
+      label: 'Closing',
+      value: fmtPct(data.closeRateMTD),
+      accent: 'border-amber-400',
+      valueColor: 'text-omega-charcoal',
+      delta: closeRateDelta,
+    },
+    {
+      label: 'Receive',
+      value: fmtMoneyCompact(data.totalReceivable),
+      accent: 'border-slate-400',
+      valueColor: 'text-omega-charcoal',
+      delta: null,
+    },
   ];
 
   return (
@@ -1031,24 +1075,22 @@ function MobileOwnerDashboard({ data, bounds, revenueDelta, profitDelta, closeRa
           </button>
         </div>
 
-        {/* 6 KPIs numa linha — scroll horizontal */}
-        <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-          {kpis.map((k) => {
-            const positive = k.delta?.positive !== false;
-            const Arrow = k.delta ? (positive ? TrendingUp : TrendingDown) : null;
-            return (
-              <div key={k.label} className={`${k.negative ? 'bg-red-600' : k.color} rounded-2xl p-3 flex-shrink-0 w-28`}>
-                <p className="text-white/70 text-[9px] font-bold uppercase tracking-wide leading-tight line-clamp-2">{k.label}</p>
-                <p className="text-white text-sm font-black mt-1 leading-none tabular-nums">{k.value}</p>
-                {k.delta && Number.isFinite(k.delta.raw) && (
-                  <div className={`flex items-center gap-0.5 mt-1 ${positive ? 'text-white/80' : 'text-red-200'}`}>
-                    {Arrow && <Arrow className="w-2.5 h-2.5" />}
-                    <span className="text-[9px] font-bold">{Math.abs(parseFloat(k.delta.text))}%</span>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        {/* 6 KPIs — uma linha, sem scroll, todos iguais */}
+        <div className="flex gap-1.5">
+          {kpis.map((k) => (
+            <div
+              key={k.label}
+              className={`flex-1 min-w-0 bg-white rounded-xl border-t-[3px] ${k.accent} flex flex-col items-center justify-center text-center py-2.5 px-0.5`}
+            >
+              <p className="text-[7px] font-bold uppercase tracking-wider text-omega-stone leading-none">{k.label}</p>
+              <p className={`text-[13px] font-black tabular-nums leading-none mt-1 ${k.valueColor}`}>{k.value}</p>
+              {k.delta && Number.isFinite(k.delta?.raw) && (
+                <p className={`text-[8px] font-bold leading-none mt-0.5 ${k.delta.positive ? 'text-emerald-500' : 'text-red-400'}`}>
+                  {k.delta.positive ? '↑' : '↓'}
+                </p>
+              )}
+            </div>
+          ))}
         </div>
       </div>
 

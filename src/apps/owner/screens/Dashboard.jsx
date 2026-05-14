@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import LoadingSpinner from '../components/LoadingSpinner';
+import LeadsHeatMap from '../components/LeadsHeatMap';
 
 // Owner Dashboard — Phase 1 of Ramon's redesign:
 //   • 6 KPI cards (MTD vs last month delta).
@@ -117,7 +118,7 @@ function lastMonthLabel(lastStart) {
 
 // Margin % thresholds — Profitable / At Risk / Loss bucketing.
 function marginBucket(marginPct) {
-  if (marginPct == null) return { label: 'No data', cls: 'bg-gray-100 text-gray-700 border-gray-200' };
+  if (marginPct == null) return { label: 'No Costing', cls: 'bg-gray-100 text-gray-500 border-gray-200' };
   if (marginPct >= 15)  return { label: 'Profitable', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
   if (marginPct >= 5)   return { label: 'At Risk',    cls: 'bg-amber-100 text-amber-800 border-amber-200' };
   return { label: 'Loss', cls: 'bg-red-100 text-red-700 border-red-200' };
@@ -999,6 +1000,9 @@ export default function Dashboard({ user, onSelectJob, onNavigate }) {
           <CashAndPayments payments={data.payments} totalReceivable={data.totalReceivable} />
           <ActionCenter actions={data.actions} onNavigate={onNavigate} />
         </section>
+
+        {/* ─── Lead Origins Heat Map ─────────────────────────────── */}
+        <LeadsHeatMap />
 
         <p className="text-[11px] text-omega-stone text-center pt-2">
           All data is updated as of {new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}

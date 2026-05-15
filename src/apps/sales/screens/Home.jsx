@@ -306,6 +306,7 @@ export default function Home({ user, onNavigate, onLogout, onOpenJob }) {
   const [notifCount, setNotifCount] = useState(0);
   const [jobs, setJobs] = useState([]);
   const [estimates, setEstimates] = useState([]);
+  const [jobCosts, setJobCosts] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -324,11 +325,14 @@ export default function Home({ user, onNavigate, onLogout, onOpenJob }) {
       const namePrefix = firstName ? `${firstName}%` : '';
 
       try {
-        const [jobsResp, estResp, evResp, notifResp] = await Promise.all([
+        const [jobsResp, estResp, costsResp, evResp, notifResp] = await Promise.all([
           // ALL jobs (sales = single-seller).
           supabase.from('jobs').select('*'),
           // Estimates — load all, narrow client-side later.
           supabase.from('estimates').select('id, job_id, status, total_amount, signed_at, created_at, updated_at'),
+          // Job costing rows — fallback for pipeline totals when no
+          // formal estimate exists yet. Tolerates missing table.
+          supabase.from('job_costs').select('job_id, estimated_revenue'),
           // Upcoming events: still filtered by assignee since the
           // EventForm reliably writes assigned_to_name. Falls back
           // to all upcoming events when we have no first name.
@@ -349,6 +353,7 @@ export default function Home({ user, onNavigate, onLogout, onOpenJob }) {
         if (cancelled) return;
         setJobs(jobsResp.data || []);
         setEstimates(estResp.data || []);
+        setJobCosts(costsResp.data || []);
         setEvents(evResp.data || []);
         setNotifCount(notifResp.count || 0);
       } catch {
@@ -407,30 +412,60 @@ export default function Home({ user, onNavigate, onLogout, onOpenJob }) {
 
   // ─── Pipeline overview rows ──────────────────────────────────────
   const pipelineRows = useMemo(() => {
-    const myJobIds = new Set(jobs.map((j) => j.id));
-    // Latest estimate per job, used to sum dollar value per phase.
-    const estByJob = new Map();
+    // Mirror the Kanban desktop logic exactly so both views show the
+    // same numbers. Three tiers, same priority order:
+    //
+    //  1. Sum of approved/signed estimates — client agreed on this.
+    //  2. job_costs.estimated_revenue      — manually entered revenue.
+    //  3. Latest estimate (any status)     — fallback for early leads
+    //     that have a draft/sent estimate but nothing approved yet.
+    //
+    // Scope: only ACTIVE pipeline jobs (in_pipeline !== false).
+    // Historic imports and archived jobs with in_pipeline = false are
+    // excluded so they don't silently distort the totals.
+
+    const APPROVED = new Set(['approved', 'signed']);
+
+    // Tier 1: sum of approved/signed per job
+    const approvedByJob = {};
     for (const e of estimates) {
-      if (!myJobIds.has(e.job_id)) continue;
-      const prev = estByJob.get(e.job_id);
+      if (!APPROVED.has(e.status)) continue;
+      approvedByJob[e.job_id] = (approvedByJob[e.job_id] || 0) + (Number(e.total_amount) || 0);
+    }
+
+    // Tier 2: job_costs.estimated_revenue (one row per job)
+    const costByJob = {};
+    for (const c of jobCosts) costByJob[c.job_id] = c;
+
+    // Tier 3: latest estimate any-status per job
+    const latestEstByJob = {};
+    for (const e of estimates) {
+      const prev = latestEstByJob[e.job_id];
       if (!prev || (e.created_at || '') > (prev.created_at || '')) {
-        estByJob.set(e.job_id, e);
+        latestEstByJob[e.job_id] = e;
       }
     }
 
+    // Only active pipeline jobs
+    const activeJobs = jobs.filter((j) => j.in_pipeline !== false);
+
     const rows = OVERVIEW_PHASES.map((phase) => {
       const matches = phase.matches
-        ? jobs.filter(phase.matches)
-        : jobs.filter((j) => j.pipeline_status === phase.key);
+        ? activeJobs.filter(phase.matches)
+        : activeJobs.filter((j) => j.pipeline_status === phase.key);
       const total = matches.reduce((acc, j) => {
-        const est = estByJob.get(j.id);
-        return acc + (Number(est?.total_amount) || 0);
+        const amount =
+          approvedByJob[j.id] ||
+          Number(costByJob[j.id]?.estimated_revenue) ||
+          Number(latestEstByJob[j.id]?.total_amount) ||
+          0;
+        return acc + amount;
       }, 0);
       return { phase, count: matches.length, total };
     });
     const totalValue = rows.reduce((acc, r) => acc + r.total, 0);
     return { rows, totalValue };
-  }, [jobs, estimates]);
+  }, [jobs, estimates, jobCosts]);
 
   // ─── Recent leads (latest 4) ─────────────────────────────────────
   const recentLeads = useMemo(() => {

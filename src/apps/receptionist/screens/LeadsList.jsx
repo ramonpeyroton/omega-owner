@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Pencil, X, Search, ArrowUp, ArrowDown, ArrowUpDown, Edit3, Save, Lock, Eye, EyeOff, ExternalLink, Trash2 } from 'lucide-react';
+import {
+  Pencil, X, Search, ArrowUp, ArrowDown, ArrowUpDown,
+  Edit3, Save, Lock, Eye, EyeOff, ExternalLink, Trash2,
+  LayoutGrid, List, SlidersHorizontal,
+} from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import Toast from '../components/Toast';
 import PhoneInput from '../../../shared/components/PhoneInput';
@@ -15,8 +19,41 @@ const FILTERS = [
   { id: 'all',   label: 'All' },
 ];
 
-// Lead status meta is sourced from leadCatalog.LEAD_STATUSES — kept
-// in one place so a new option only needs the migration + the catalog.
+// Sort options for card view — mirrors the COLUMNS list so the same
+// sort key works in both modes (list uses column headers, cards uses
+// the dropdown here).
+const CARD_SORT_OPTIONS = [
+  { id: 'date',     label: 'Date' },
+  { id: 'name',     label: 'Name' },
+  { id: 'address',  label: 'Address' },
+  { id: 'phone',    label: 'Phone' },
+  { id: 'source',   label: 'Source' },
+  { id: 'project',  label: 'Project' },
+  { id: 'owner',    label: 'Owner' },
+  { id: 'appt',     label: 'Appt Date' },
+  { id: 'status',   label: 'Status' },
+  { id: 'pipeline', label: 'Pipeline' },
+  { id: 'touch',    label: 'Last Touch' },
+];
+
+// Left-border accent color for card view.
+// Priority: appointment_set (blue) > follow_up (amber) > lost/declined (red)
+//           > in_pipeline (orange) > default (gray).
+function getCardBorderColor(r) {
+  if (r.lead_status === 'appointment_set')               return '#378ADD';
+  if (r.lead_status === 'follow_up')                     return '#EF9F27';
+  if (r.lead_status === 'lost' || r.lead_status === 'declined') return '#E24B4A';
+  if (r.in_pipeline)                                     return '#D85A30';
+  return '#888780';
+}
+
+// Default view mode per role.
+// sales / owner (MacBook) → cards.
+// receptionist / operations / marketing (desktop) → list.
+function defaultViewForRole(role) {
+  if (role === 'sales' || role === 'owner') return 'cards';
+  return 'list';
+}
 
 function startOf(scope) {
   const d = new Date();
@@ -59,19 +96,10 @@ const COLUMNS = [
   { id: 'address',  label: 'Address',      get: (r) => r.address || r.city || '' },
   { id: 'phone',    label: 'Phone #',      get: (r) => r.client_phone || '' },
   { id: 'name',     label: 'Name',         get: (r) => r.client_name || '' },
-  // Lead Owner — who earns the receptionist commission for this lead.
-  // Sortable so you can group everything yours-vs-mine in one click.
   { id: 'owner',    label: 'Owner',        get: (r) => r.lead_owner || '' },
   { id: 'project',  label: 'Project',      get: (r) => joinedServices(r) },
-  // Effective appt date — earliest upcoming sales_visit event, or
-  // the lead's preferred_visit_date when no event exists yet.
-  // Loaded into row.appt_date_effective in the load() function.
   { id: 'appt',     label: 'Appt Date',    get: (r) => r.appt_date_effective || '' },
-  // Status column reflects LEAD_STATUS (Rafaela's tag), NOT
-  // pipeline_status. Sort key is the label so A→Z grouping makes sense.
   { id: 'status',   label: 'Status',       get: (r) => (leadStatusMeta(r.lead_status)?.label || '') },
-  // Pipeline visibility — drives whether the lead shows on Attila's
-  // kanban. Toggle ON is free, OFF requires PIN (see saveInPipeline).
   { id: 'pipeline', label: 'Pipeline',     get: (r) => (r.in_pipeline ? 'Yes' : 'No') },
   { id: 'touch',    label: 'Last Touch',   get: (r) => r.last_touch_at || '' },
   { id: 'notes',    label: 'Info / Notes', get: (r) => r.last_touch_note || '' },
@@ -86,34 +114,75 @@ function compare(a, b) {
 }
 
 export default function LeadsList({ user, onBack, onOpenJob }) {
-  const [filter, setFilter] = useState('all');
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [editingLead, setEditingLead] = useState(null);
-  const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('date'); // column id
-  const [sortDir, setSortDir] = useState('desc'); // asc | desc
-  // PIN gate when toggling OFF a lead that's currently in the pipeline.
-  // Free in the other direction (promoting cold → pipeline).
-  const [pinGate, setPinGate] = useState(null); // { lead } | null
-  const [deletingLead, setDeletingLead] = useState(null); // lead | null
+  const [filter, setFilter]         = useState('all');
+  const [rows, setRows]             = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [toast, setToast]           = useState(null);
+  const [editing, setEditing]       = useState(null);       // last-touch modal
+  const [editingLead, setEditingLead] = useState(null);     // full edit modal
+  const [search, setSearch]         = useState('');
+  const [sortBy, setSortBy]         = useState('date');
+  const [sortDir, setSortDir]       = useState('desc');
+  const [pinGate, setPinGate]       = useState(null);       // { lead } | null
+  const [deletingLead, setDeletingLead] = useState(null);   // lead | null
+
+  // ── View mode + filter state ────────────────────────────────────
+  const [viewMode, setViewMode]         = useState(() => defaultViewForRole(user?.role));
+  const [prefLoaded, setPrefLoaded]     = useState(false);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [filters, setFilters]           = useState({ status: '', source: '', owner: '', pipeline: '' });
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter]);
+
+  // Load saved view preferences from user_preferences table.
+  // Silent on error — table may not exist yet (migration 062 pending).
+  useEffect(() => {
+    if (!user?.name || prefLoaded) return;
+    let active = true;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('user_preferences')
+          .select('leads_view_mode, leads_sort_field, leads_sort_dir')
+          .eq('user_name', user.name)
+          .maybeSingle();
+        if (!active) return;
+        if (data) {
+          if (data.leads_view_mode)  setViewMode(data.leads_view_mode);
+          if (data.leads_sort_field) setSortBy(data.leads_sort_field);
+          if (data.leads_sort_dir)   setSortDir(data.leads_sort_dir);
+        }
+      } catch { /* table not yet created — silent */ }
+      finally   { if (active) setPrefLoaded(true); }
+    })();
+    return () => { active = false; };
+  }, [user?.name]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist a view preference change (upsert keyed on user_name).
+  async function saveViewPref({ mode, field, dir } = {}) {
+    if (!user?.name) return;
+    try {
+      await supabase.from('user_preferences').upsert(
+        {
+          user_name:        user.name,
+          leads_view_mode:  mode  ?? viewMode,
+          leads_sort_field: field ?? sortBy,
+          leads_sort_dir:   dir   ?? sortDir,
+          updated_at:       new Date().toISOString(),
+        },
+        { onConflict: 'user_name' }
+      );
+    } catch { /* silent */ }
+  }
+
+  function handleViewMode(mode) {
+    setViewMode(mode);
+    saveViewPref({ mode });
+  }
 
   async function load() {
     setLoading(true);
     try {
-      // ⚠️ Historically this query was scoped to created_by='receptionist'
-      // because My Leads was a receptionist-only screen. It now shows
-      // up in 6 different role apps AND ingests CSV imports
-      // (created_by='import'). Filtering on creator hid the entire
-      // import batch from Rafa's view. The screen has no per-owner
-      // filter either — any role with sidebar access sees the whole
-      // book of leads, ordered newest first. Limit bumped to 2000 to
-      // accommodate Ramon's backfill of 200+ cold leads without
-      // pagination work.
       let q = supabase
         .from('jobs')
         .select('id, client_name, client_email, client_phone, address, city, unit_number, service, additional_services, lead_source, pipeline_status, lead_status, in_pipeline, lead_owner, assigned_to, preferred_visit_date, lead_date, created_at, last_touch_at, last_touch_note')
@@ -126,13 +195,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
       const { data, error } = await q;
       if (error) throw error;
 
-      // Pull every sales_visit calendar event linked to one of the
-      // leads we just loaded. Then for each lead pick the EARLIEST
-      // upcoming visit (or, if no upcoming, the most recent past).
-      // This is what fills the "Appt Date" column — the previously
-      // shown jobs.preferred_visit_date is only ever set by the
-      // CSV import, so it was misleading when Rafa actually scheduled
-      // a visit through the Calendar.
       const ids = (data || []).map((r) => r.id);
       let apptByJob = {};
       if (ids.length) {
@@ -143,13 +205,12 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
           .in('job_id', ids)
           .order('starts_at', { ascending: true });
         const now = Date.now();
-        const future = {};   // job_id → earliest upcoming
-        const past   = {};   // job_id → most recent past
+        const future = {};
+        const past   = {};
         for (const ev of (events || [])) {
           if (!ev.job_id || !ev.starts_at) continue;
           const t = new Date(ev.starts_at).getTime();
           if (t >= now) {
-            // events came sorted asc, so first hit per job IS the earliest.
             if (!future[ev.job_id]) future[ev.job_id] = ev.starts_at;
           } else {
             past[ev.job_id] = ev.starts_at;
@@ -158,8 +219,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
         for (const jid of ids) apptByJob[jid] = future[jid] || past[jid] || null;
       }
 
-      // Stamp each row with appt_date_effective so the COLUMNS getter
-      // and the cell render both read from the same source.
       const decorated = (data || []).map((r) => ({
         ...r,
         appt_date_effective: apptByJob[r.id] || r.preferred_visit_date || null,
@@ -198,14 +257,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
     }
   }
 
-  // Toggles whether this lead is visible in Attila's kanban.
-  // PROMOTE (false → true): no PIN required. Also resets
-  // pipeline_status to 'new_lead' so the lead lands in Attila's New
-  // Lead column ready for him to start the questionnaire — same
-  // entry point a brand-new lead from the receptionist takes.
-  // EJECT (true → false): PIN required (own user). Pipeline_status
-  // is left alone so the lead's history is preserved if it's
-  // promoted again later.
   async function setInPipeline(lead, nextValue) {
     const id = lead.id;
     const prevRows = rows;
@@ -235,8 +286,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
     }
   }
 
-  // PIN gate — opens the modal only when the user is trying to
-  // EJECT a lead. Promotion goes straight through.
   function requestPipelineToggle(lead) {
     if (!lead.in_pipeline) {
       setInPipeline(lead, true);
@@ -245,9 +294,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
     setPinGate({ lead });
   }
 
-  // Inline lead_status update from the table dropdown. Optimistic —
-  // we patch the row immediately and rollback on failure. Empty string
-  // resets the lead to "no status yet" (NULL in the DB).
   async function saveLeadStatus(id, value) {
     const next = value || null;
     const prev = rows;
@@ -265,7 +311,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
     }
   }
 
-  // Commits the EditLead form back to Supabase and updates the in-memory row.
   async function saveLead(id, patch) {
     try {
       const { error } = await supabase.from('jobs').update(patch).eq('id', id);
@@ -292,21 +337,41 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
   }
 
   function toggleSort(colId) {
+    let nextField = colId;
+    let nextDir;
     if (sortBy === colId) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      nextDir = sortDir === 'asc' ? 'desc' : 'asc';
+      setSortDir(nextDir);
     } else {
+      nextDir = colId === 'date' || colId === 'touch' ? 'desc' : 'asc';
       setSortBy(colId);
-      // Date/Touch default to desc (newest first); text columns default to asc.
-      setSortDir(colId === 'date' || colId === 'touch' ? 'desc' : 'asc');
+      setSortDir(nextDir);
     }
+    saveViewPref({ field: nextField, dir: nextDir });
   }
 
-  // Client-side search across the key free-text fields.
-  // Phone search ignores formatting by stripping non-digits on both sides.
+  // Unique lead owners derived from loaded rows — used by the Owner filter.
+  const uniqueOwners = useMemo(() => {
+    const set = new Set(rows.map((r) => r.lead_owner).filter(Boolean));
+    return [...set].sort();
+  }, [rows]);
+
+  // Active filters as [key, value] pairs for chip display.
+  const activeFilters = Object.entries(filters).filter(([, v]) => v !== '');
+
+  function filterChipLabel(key, value) {
+    if (key === 'status')   return leadStatusMeta(value)?.label || value;
+    if (key === 'pipeline') return value === 'yes' ? 'In Pipeline' : 'Not in Pipeline';
+    return value;
+  }
+
+  // Client-side search + filter + sort.
   const visibleRows = useMemo(() => {
-    const needle = search.trim().toLowerCase();
+    const needle      = search.trim().toLowerCase();
     const digitsNeedle = needle.replace(/\D/g, '');
     let out = rows;
+
+    // Text search
     if (needle) {
       out = rows.filter((r) => {
         if (r.client_name?.toLowerCase().includes(needle)) return true;
@@ -318,13 +383,22 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
         return false;
       });
     }
+
+    // Categorical filters
+    if (filters.status)             out = out.filter((r) => r.lead_status === filters.status);
+    if (filters.source)             out = out.filter((r) => r.lead_source === filters.source);
+    if (filters.owner)              out = out.filter((r) => r.lead_owner  === filters.owner);
+    if (filters.pipeline === 'yes') out = out.filter((r) => !!r.in_pipeline);
+    if (filters.pipeline === 'no')  out = out.filter((r) => !r.in_pipeline);
+
+    // Sort
     const col = COLUMNS.find((c) => c.id === sortBy);
     if (col) {
       const sign = sortDir === 'asc' ? 1 : -1;
       out = [...out].sort((a, b) => sign * compare(col.get(a), col.get(b)));
     }
     return out;
-  }, [rows, search, sortBy, sortDir]);
+  }, [rows, search, sortBy, sortDir, filters]);
 
   const empty = !loading && visibleRows.length === 0;
 
@@ -334,10 +408,12 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
 
       <header className="bg-white border-b border-gray-200 px-6 md:px-8 py-5 flex-shrink-0">
         <h1 className="text-xl font-bold text-omega-charcoal">My Leads</h1>
-        <p className="text-xs text-omega-stone mt-0.5">Leads you created — click a column to sort, use the search to find old leads.</p>
+        <p className="text-xs text-omega-stone mt-0.5">All leads — search, filter, and toggle between list and cards view.</p>
       </header>
 
+      {/* ── Toolbar ──────────────────────────────────────────────── */}
       <div className="bg-white border-b border-gray-200 px-6 md:px-8 py-2 flex flex-wrap gap-2 items-center flex-shrink-0">
+        {/* Period tabs */}
         {FILTERS.map((f) => (
           <button
             key={f.id}
@@ -352,13 +428,9 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
           </button>
         ))}
 
-        <div className="relative flex-1 min-w-[220px] max-w-md ml-2">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[180px] max-w-sm ml-2">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-omega-stone pointer-events-none" />
-          {/* autoComplete="off" + a unique name keeps Chrome/Safari
-              from injecting the logged-in user's name here as a
-              "username" guess after they type a PIN in the toggle
-              modal. Without this the browser would silently fill
-              this box on focus and the lead list would disappear. */}
           <input
             type="search"
             name="omega-leads-search"
@@ -371,19 +443,183 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
           />
         </div>
 
-        <span className="ml-auto self-center text-xs text-omega-stone">
-          {visibleRows.length}{search ? ` / ${rows.length}` : ''} lead{rows.length === 1 ? '' : 's'}
+        {/* Sort-by select (only in cards view — list uses column headers) */}
+        {viewMode === 'cards' && (
+          <select
+            value={sortBy}
+            onChange={(e) => toggleSort(e.target.value)}
+            className="text-xs font-semibold border border-gray-200 rounded-xl px-3 py-2 bg-omega-cloud text-omega-slate focus:border-omega-orange focus:outline-none"
+            title="Sort by"
+          >
+            {CARD_SORT_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>{o.label}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Sort direction toggle (cards view only) */}
+        {viewMode === 'cards' && (
+          <button
+            onClick={() => {
+              const next = sortDir === 'asc' ? 'desc' : 'asc';
+              setSortDir(next);
+              saveViewPref({ dir: next });
+            }}
+            title={sortDir === 'asc' ? 'Ascending — click to reverse' : 'Descending — click to reverse'}
+            className="p-2 rounded-xl border border-gray-200 bg-omega-cloud text-omega-slate hover:border-omega-orange hover:text-omega-orange transition-colors"
+          >
+            {sortDir === 'asc'
+              ? <ArrowUp className="w-3.5 h-3.5" />
+              : <ArrowDown className="w-3.5 h-3.5" />}
+          </button>
+        )}
+
+        {/* Filters button */}
+        <button
+          onClick={() => setShowFilterPanel((v) => !v)}
+          className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-semibold transition-colors ${
+            showFilterPanel || activeFilters.length > 0
+              ? 'border-omega-orange bg-omega-pale text-omega-charcoal'
+              : 'border-gray-200 bg-omega-cloud text-omega-slate hover:border-omega-orange'
+          }`}
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5" />
+          Filters
+          {activeFilters.length > 0 && (
+            <span className="ml-0.5 w-4 h-4 rounded-full bg-omega-orange text-white text-[9px] font-bold inline-flex items-center justify-center">
+              {activeFilters.length}
+            </span>
+          )}
+        </button>
+
+        {/* View toggle: List | Cards */}
+        <div className="inline-flex items-center border border-gray-200 rounded-xl overflow-hidden">
+          <button
+            onClick={() => handleViewMode('list')}
+            title="List view"
+            className={`p-2 transition-colors ${
+              viewMode === 'list'
+                ? 'bg-omega-orange text-white'
+                : 'bg-omega-cloud text-omega-slate hover:text-omega-charcoal'
+            }`}
+          >
+            <List className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => handleViewMode('cards')}
+            title="Cards view"
+            className={`p-2 transition-colors ${
+              viewMode === 'cards'
+                ? 'bg-omega-orange text-white'
+                : 'bg-omega-cloud text-omega-slate hover:text-omega-charcoal'
+            }`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Lead count */}
+        <span className="ml-auto self-center text-xs text-omega-stone whitespace-nowrap">
+          {visibleRows.length}{search || activeFilters.length > 0 ? ` / ${rows.length}` : ''} lead{rows.length === 1 ? '' : 's'}
         </span>
       </div>
 
+      {/* ── Filter panel ─────────────────────────────────────────── */}
+      {showFilterPanel && (
+        <div className="bg-white border-b border-gray-200 px-6 md:px-8 py-3 flex flex-wrap gap-3 items-center flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-omega-stone whitespace-nowrap">Status</span>
+            <select
+              value={filters.status}
+              onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:border-omega-orange focus:outline-none"
+            >
+              <option value="">All</option>
+              {LEAD_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-omega-stone whitespace-nowrap">Source</span>
+            <select
+              value={filters.source}
+              onChange={(e) => setFilters((f) => ({ ...f, source: e.target.value }))}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:border-omega-orange focus:outline-none"
+            >
+              <option value="">All</option>
+              {LEAD_SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-omega-stone whitespace-nowrap">Owner</span>
+            <select
+              value={filters.owner}
+              onChange={(e) => setFilters((f) => ({ ...f, owner: e.target.value }))}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:border-omega-orange focus:outline-none"
+            >
+              <option value="">All</option>
+              {uniqueOwners.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-omega-stone whitespace-nowrap">Pipeline</span>
+            <select
+              value={filters.pipeline}
+              onChange={(e) => setFilters((f) => ({ ...f, pipeline: e.target.value }))}
+              className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-white focus:border-omega-orange focus:outline-none"
+            >
+              <option value="">All</option>
+              <option value="yes">In Pipeline</option>
+              <option value="no">Not in Pipeline</option>
+            </select>
+          </div>
+
+          {activeFilters.length > 0 && (
+            <button
+              onClick={() => setFilters({ status: '', source: '', owner: '', pipeline: '' })}
+              className="text-xs text-omega-stone hover:text-red-500 transition-colors font-semibold ml-auto"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── Active filter chips ───────────────────────────────────── */}
+      {activeFilters.length > 0 && (
+        <div className="bg-omega-cloud/50 border-b border-gray-100 px-6 md:px-8 py-2 flex flex-wrap gap-2 items-center flex-shrink-0">
+          {activeFilters.map(([key, value]) => (
+            <span
+              key={key}
+              className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full bg-blue-50 text-blue-900 text-xs font-semibold border border-blue-200"
+            >
+              <span className="text-blue-400 text-[10px] uppercase tracking-wider">{key}:</span>
+              {filterChipLabel(key, value)}
+              <button
+                onClick={() => setFilters((f) => ({ ...f, [key]: '' }))}
+                className="ml-1 w-4 h-4 rounded-full bg-blue-200 hover:bg-blue-400 text-blue-800 hover:text-white inline-flex items-center justify-center transition-colors"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* ── Main content ──────────────────────────────────────────── */}
       <main className="flex-1 overflow-auto">
         {loading && <p className="text-sm text-omega-stone text-center py-10">Loading…</p>}
+
         {empty && (
           <div className="text-center py-12">
             <p className="text-sm text-omega-stone">
-              {search ? `No leads match "${search}".` : 'No leads yet.'}
+              {search || activeFilters.length > 0
+                ? 'No leads match your filters.'
+                : 'No leads yet.'}
             </p>
-            {!search && (
+            {!search && activeFilters.length === 0 && (
               <button
                 onClick={onBack}
                 className="mt-4 inline-flex items-center justify-center px-4 py-2.5 rounded-xl bg-omega-orange hover:bg-omega-dark text-white text-sm font-semibold"
@@ -394,7 +630,8 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
           </div>
         )}
 
-        {!loading && visibleRows.length > 0 && (
+        {/* ── List view ─────────────────────────────────────────── */}
+        {!loading && visibleRows.length > 0 && viewMode === 'list' && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[1200px]">
               <thead className="bg-omega-cloud sticky top-0 z-10">
@@ -460,12 +697,6 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
                           : <span className="text-omega-stone">—</span>}
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap">
-                        {/* Inline-editable lead_status. Pill is the
-                            <select>'s background so the click target
-                            matches the visual chip — no separate
-                            "edit" affordance needed. Native select on
-                            iPad gives Rafaela the standard wheel
-                            picker she's already used to. */}
                         <LeadStatusSelect
                           value={r.lead_status || ''}
                           meta={ls}
@@ -519,6 +750,25 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
             </table>
           </div>
         )}
+
+        {/* ── Cards view ────────────────────────────────────────── */}
+        {!loading && visibleRows.length > 0 && viewMode === 'cards' && (
+          <div className="p-4 md:p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 auto-rows-min">
+            {visibleRows.map((r) => (
+              <LeadCard
+                key={r.id}
+                r={r}
+                onOpenJob={onOpenJob}
+                onEdit={() => setEditingLead(r)}
+                onEditTouch={() => setEditing(r)}
+                onStatusChange={(v) => saveLeadStatus(r.id, v)}
+                onPipelineToggle={() => requestPipelineToggle(r)}
+                onDelete={() => setDeletingLead(r)}
+                user={user}
+              />
+            ))}
+          </div>
+        )}
       </main>
 
       {editing && (
@@ -560,10 +810,144 @@ export default function LeadsList({ user, onBack, onOpenJob }) {
   );
 }
 
+// ─── Lead card (card view) ────────────────────────────────────────
+// Colored left border (3 px) gives instant visual priority signal.
+// Footer row has the status selector, pipeline toggle, and action
+// buttons so the most-frequent actions are reachable without opening
+// a modal.
+function LeadCard({ r, onOpenJob, onEdit, onEditTouch, onStatusChange, onPipelineToggle, onDelete, user }) {
+  const ls          = leadStatusMeta(r.lead_status);
+  const borderColor = getCardBorderColor(r);
+  const services    = joinedServices(r);
+
+  return (
+    <div
+      className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden"
+      style={{ borderLeftColor: borderColor, borderLeftWidth: 3 }}
+    >
+      {/* ── Header: badges + date ── */}
+      <div className="px-3 pt-3 pb-2 flex items-start justify-between gap-2">
+        <div className="flex flex-wrap gap-1">
+          {ls && (
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${ls.cls}`}>
+              {ls.label}
+            </span>
+          )}
+          {r.lead_source && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-omega-slate border border-gray-200">
+              {r.lead_source}
+            </span>
+          )}
+        </div>
+        <span className="text-[10px] text-omega-stone whitespace-nowrap flex-shrink-0 mt-0.5">
+          {fmtShortDate(effectiveDate(r))}
+        </span>
+      </div>
+
+      {/* ── Name + open-job button ── */}
+      <div className="px-3 pb-1 flex items-center gap-1.5">
+        <span className="font-bold text-omega-charcoal text-sm truncate flex-1">
+          {r.client_name || <span className="italic text-omega-stone font-normal">No name</span>}
+        </span>
+        {onOpenJob && (
+          <button
+            onClick={() => onOpenJob(r)}
+            title="Open job card"
+            className="flex-shrink-0 p-1 rounded text-omega-stone hover:text-omega-orange hover:bg-omega-pale transition-colors"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* ── Contact info ── */}
+      <div className="px-3 pb-2 space-y-0.5">
+        {r.client_phone && (
+          <p className="text-xs text-omega-slate">{r.client_phone}</p>
+        )}
+        {r.client_email && (
+          <p className="text-xs text-omega-slate truncate" title={r.client_email}>{r.client_email}</p>
+        )}
+        {(r.address || r.city) && (
+          <p className="text-xs text-omega-stone truncate">{r.address || r.city}</p>
+        )}
+      </div>
+
+      {/* ── Project + owner ── */}
+      {(services || r.lead_owner) && (
+        <div className="px-3 pb-2 flex items-center gap-2 min-w-0">
+          {services && (
+            <span className="text-xs text-omega-stone capitalize truncate flex-1">{services}</span>
+          )}
+          {r.lead_owner && (
+            <span className="text-xs font-semibold text-omega-slate flex-shrink-0 whitespace-nowrap">{r.lead_owner}</span>
+          )}
+        </div>
+      )}
+
+      {/* ── Appointment ── */}
+      {r.appt_date_effective && (
+        <div className="px-3 pb-2">
+          <span className="inline-flex items-center text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+            Appt:{' '}
+            {r.appt_date_effective.includes('T')
+              ? new Date(r.appt_date_effective).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })
+              : fmtDateOnly(r.appt_date_effective)}
+          </span>
+        </div>
+      )}
+
+      {/* ── Last touch note ── */}
+      {r.last_touch_note && (
+        <div className="mx-3 mb-2 p-2 rounded-lg bg-amber-50 border border-amber-100">
+          <p className="text-[11px] text-amber-800 line-clamp-2">{r.last_touch_note}</p>
+          {r.last_touch_at && (
+            <p className="text-[9px] text-amber-500 mt-0.5">{fmtShortDate(r.last_touch_at)}</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Footer: status select + pipeline + action buttons ── */}
+      <div className="mt-auto border-t border-gray-100 px-3 py-2 flex items-center gap-2 flex-wrap">
+        <LeadStatusSelect
+          value={r.lead_status || ''}
+          meta={ls}
+          onChange={onStatusChange}
+        />
+        <PipelineToggle on={!!r.in_pipeline} onToggle={onPipelineToggle} />
+        <div className="ml-auto flex items-center gap-0.5">
+          {!r.last_touch_note && (
+            <button
+              onClick={onEditTouch}
+              title="Add last touch note"
+              className="p-1.5 rounded-lg text-omega-stone hover:text-amber-600 hover:bg-amber-50 transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <button
+            onClick={onEdit}
+            title="Edit lead"
+            className="p-1.5 rounded-lg text-omega-stone hover:text-omega-orange hover:bg-omega-pale transition-colors"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+          </button>
+          {user?.role === 'operations' && (
+            <button
+              onClick={onDelete}
+              title="Delete lead"
+              className="p-1.5 rounded-lg text-omega-stone hover:text-red-500 hover:bg-red-50 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Pipeline visibility toggle ──────────────────────────────────
-// Compact iOS-style switch. Orange when on, grey when off. Same
-// visual idiom Rafaela's already familiar with from the other
-// switches in the app.
 function PipelineToggle({ on, onToggle }) {
   return (
     <button
@@ -576,9 +960,7 @@ function PipelineToggle({ on, onToggle }) {
       }`}
       title={on ? 'Click to remove from pipeline (PIN required)' : 'Click to send to pipeline'}
     >
-      <span
-        className={`w-7 h-3.5 rounded-full relative ${on ? 'bg-white/30' : 'bg-gray-300'}`}
-      >
+      <span className={`w-7 h-3.5 rounded-full relative ${on ? 'bg-white/30' : 'bg-gray-300'}`}>
         <span
           className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white transition-all ${
             on ? 'left-[18px]' : 'left-0.5'
@@ -593,12 +975,6 @@ function PipelineToggle({ on, onToggle }) {
 }
 
 // ─── PIN gate for ejecting a lead from the pipeline ──────────────
-// Asks for the LOGGED-IN user's own PIN. Promoting cold → pipeline
-// is intentionally NOT gated — it's a positive action and the bar
-// to entry should stay low. The reverse (yanking a lead Attila has
-// been working) costs a few seconds of friction so it's deliberate.
-// Reason → friendly message. Surfaces the specific failure mode so
-// the user knows what to do next (re-login vs retype PIN).
 const PIN_REASON_MSG = {
   empty_pin:    'Type your PIN to confirm.',
   no_session:   'Your session looks stale — sign out and sign back in.',
@@ -645,9 +1021,9 @@ function DeleteLeadModal({ lead, onClose, onConfirm }) {
 }
 
 function PipelinePinModal({ lead, user, onClose, onConfirm }) {
-  const [pin, setPin] = useState('');
+  const [pin, setPin]         = useState('');
   const [verifying, setVerifying] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError]     = useState('');
   const [showPin, setShowPin] = useState(false);
 
   async function verify() {
@@ -681,18 +1057,7 @@ function PipelinePinModal({ lead, user, onClose, onConfirm }) {
           The lead will leave Attila's kanban but stay here in My Leads.
           You can promote it back any time. Type your PIN to confirm.
         </p>
-        {/* Wrapped in its own form with autoComplete="off" so the
-            browser stops trying to pair the PIN field with the search
-            box on the page below as a "login" form — that pairing was
-            silently injecting the user's name into the search box and
-            wiping the visible list when the modal closed. The hidden
-            dummy fields above the real PIN input absorb any aggressive
-            autofill (Chrome on iPad ignores autoComplete="off" on
-            password fields without dummy fields nearby). */}
-        <form
-          autoComplete="off"
-          onSubmit={(e) => { e.preventDefault(); verify(); }}
-        >
+        <form autoComplete="off" onSubmit={(e) => { e.preventDefault(); verify(); }}>
           <input type="text" name="username" autoComplete="off" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: '-9999px', width: 1, height: 1 }} />
           <input type="password" autoComplete="new-password" tabIndex={-1} aria-hidden="true" style={{ position: 'absolute', left: '-9999px', width: 1, height: 1 }} />
           <div className="relative">
@@ -720,9 +1085,7 @@ function PipelinePinModal({ lead, user, onClose, onConfirm }) {
               {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
           </div>
-          {error && (
-            <p className="mt-2 text-xs text-red-600 font-semibold">{error}</p>
-          )}
+          {error && <p className="mt-2 text-xs text-red-600 font-semibold">{error}</p>}
           <div className="flex gap-2 mt-4">
             <button
               type="button"
@@ -745,8 +1108,7 @@ function PipelinePinModal({ lead, user, onClose, onConfirm }) {
   );
 }
 
-// Inline pill-shaped <select> for the Status column. Tinted with the
-// status's own colors when set; neutral grey + "Set status…" when null.
+// Inline pill-shaped <select> for the Status column / card footer.
 function LeadStatusSelect({ value, meta, onChange }) {
   const cls = meta?.cls || 'bg-gray-100 text-omega-stone border-gray-200';
   return (
@@ -786,7 +1148,7 @@ function SortHeader({ col, active, dir, onClick }) {
 }
 
 function LastTouchModal({ lead, onClose, onSave }) {
-  const [note, setNote] = useState(lead.last_touch_note || '');
+  const [note, setNote]     = useState(lead.last_touch_note || '');
   const [saving, setSaving] = useState(false);
 
   async function handleSave() {
@@ -844,12 +1206,6 @@ function LastTouchModal({ lead, onClose, onSave }) {
 }
 
 // ─── Edit lead modal ────────────────────────────────────────────────
-// Full-form editor for leads already in the database. The fields mirror
-// NewLead so the receptionist can fix a typo, add missing info, or move
-// an old backfill lead to its correct state.
-
-// Splits `client_name` into first/last on a best-effort basis for the
-// form. The user can edit both halves freely.
 function splitName(name) {
   if (!name) return { first: '', last: '' };
   const parts = name.trim().split(/\s+/);
@@ -857,16 +1213,11 @@ function splitName(name) {
   return { first: parts[0], last: parts.slice(1).join(' ') };
 }
 
-// The lead's stored `address` already contains street + city + state + zip.
-// For editing we split the FIRST segment (street+unit) out so the user can
-// edit it, and keep city/unit/zip as their own columns.
 function extractStreet(address) {
   if (!address) return '';
   return address.split(',')[0].trim();
 }
 
-// Best-effort: pull the state code (CT/NY/NJ) out of a stored address.
-// Returns 'CT' as default for old rows that never had the state picker.
 function extractState(address) {
   if (!address) return 'CT';
   const m = String(address).match(/\b(CT|NY|NJ)\b/i);
@@ -893,8 +1244,7 @@ function EditLeadModal({ lead, onClose, onSave }) {
     notes:           lead.last_touch_note || '',
   });
   const [saving, setSaving] = useState(false);
-  // Same user-list pattern as NewLead — drives the Lead Owner select.
-  const [staff, setStaff] = useState([]);
+  const [staff, setStaff]   = useState([]);
   useEffect(() => {
     let active = true;
     (async () => {
@@ -926,9 +1276,9 @@ function EditLeadModal({ lead, onClose, onSave }) {
     const streetLine = form.unit_number.trim()
       ? `${form.street.trim()} ${form.unit_number.trim()}`
       : form.street.trim();
-    const stateCode = (form.state || 'CT').toUpperCase();
+    const stateCode  = (form.state || 'CT').toUpperCase();
     const fullAddress = [streetLine, form.city, stateCode].filter(Boolean).join(', ');
-    const e164 = toE164(form.phone) || form.phone.trim() || null;
+    const e164       = toE164(form.phone) || form.phone.trim() || null;
     const [primary, ...extra] = form.services;
 
     const patch = {
@@ -967,7 +1317,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
         </div>
 
         <div className="space-y-4">
-          {/* Row 1: Date + Status */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Lead Date</label>
@@ -981,9 +1330,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Row 1b: Lead Status — Rafaela's quick tag, separate from
-              pipeline. Lives just below pipeline so editors see both
-              tracks side by side and don't confuse them. */}
           <div>
             <label className={labelCls}>Lead Status</label>
             <select className={inputCls} value={form.lead_status} onChange={(e) => set('lead_status', e.target.value)}>
@@ -992,7 +1338,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </select>
           </div>
 
-          {/* Row 1c: Lead Owner — drives commission attribution. */}
           <div>
             <label className={labelCls}>Lead Owner</label>
             <select className={inputCls} value={form.lead_owner} onChange={(e) => set('lead_owner', e.target.value)}>
@@ -1005,7 +1350,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </select>
           </div>
 
-          {/* Row 2: Name */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>First Name</label>
@@ -1017,7 +1361,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Row 3: Phone + Email */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>Phone</label>
@@ -1029,7 +1372,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Row 4: Address + Unit */}
           <div className="grid grid-cols-[1fr_140px] gap-3">
             <div>
               <label className={labelCls}>Street</label>
@@ -1041,19 +1383,13 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Row 5: State + City. State drives the city list — switching
-              state clears the picked city so we don't end up with a
-              CT town stamped on a NY lead. */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={labelCls}>State</label>
               <select
                 className={inputCls}
                 value={form.state}
-                onChange={(e) => {
-                  set('state', e.target.value);
-                  set('city', '');
-                }}
+                onChange={(e) => { set('state', e.target.value); set('city', ''); }}
               >
                 {STATES.map((s) => (
                   <option key={s.code} value={s.code}>{s.name} ({s.code})</option>
@@ -1072,7 +1408,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </div>
           </div>
 
-          {/* Row 6: Source */}
           <div>
             <label className={labelCls}>Lead Source</label>
             <select className={inputCls} value={form.lead_source} onChange={(e) => set('lead_source', e.target.value)}>
@@ -1081,7 +1416,6 @@ function EditLeadModal({ lead, onClose, onSave }) {
             </select>
           </div>
 
-          {/* Row 7: Services (multi) */}
           <div>
             <label className={labelCls}>Services · {form.services.length} selected</label>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
